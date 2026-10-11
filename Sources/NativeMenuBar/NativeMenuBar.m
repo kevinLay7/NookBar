@@ -7,11 +7,36 @@
 #import <dlfcn.h>
 #import <objc/message.h>
 #import <unistd.h>
-static const int64_t OverflowEventMarker = 0x4E424F46;
+static const int64_t MenuBarEventMarker = 0x4E424F46;
 
-BOOL NBIsOwnMenuBarOverflowEvent(CGEventRef event) {
-    return event && CGEventGetIntegerValueField(event, kCGEventSourceUserData) == OverflowEventMarker &&
+BOOL NBIsOwnMenuBarEvent(CGEventRef event) {
+    return event && CGEventGetIntegerValueField(event, kCGEventSourceUserData) == MenuBarEventMarker &&
         CGEventGetIntegerValueField(event, kCGEventSourceUnixProcessID) == getpid();
+}
+
+static BOOL PostMenuBarClick(CGPoint point) {
+    if (!CGPreflightPostEventAccess() ||
+        CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft) ||
+        CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonRight) ||
+        CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonCenter)) return NO;
+    CGEventRef cursor = CGEventCreate(NULL);
+    CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
+    CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
+    BOOL delivered = cursor && down && up;
+    if (delivered) {
+        CGEventSetIntegerValueField(down, kCGEventSourceUserData, MenuBarEventMarker);
+        CGEventSetIntegerValueField(up, kCGEventSourceUserData, MenuBarEventMarker);
+        CGEventSetIntegerValueField(down, kCGMouseEventClickState, 1);
+        CGEventSetIntegerValueField(up, kCGMouseEventClickState, 0);
+        CGEventSetFlags(down, 0); CGEventSetFlags(up, 0);
+        CGEventPost(kCGHIDEventTap, down); CGEventPost(kCGHIDEventTap, up);
+        CGEventRef restore = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, CGEventGetLocation(cursor), kCGMouseButtonLeft);
+        if (restore) { CGEventSetFlags(restore, CGEventGetFlags(cursor)); CGEventPost(kCGHIDEventTap, restore); CFRelease(restore); }
+    }
+    if (cursor) CFRelease(cursor);
+    if (down) CFRelease(down);
+    if (up) CFRelease(up);
+    return delivered; // Delivery only; verify the interface/action separately.
 }
 static id Attribute(AXUIElementRef element, CFStringRef key) {
     CFTypeRef value = NULL;
@@ -235,29 +260,11 @@ BOOL NBSetMenuBarOverflowExpanded(CGRect screenFrame, BOOL expanded) {
     NSInteger state; AXUIElementRef control = CopyOverflowControl(screenFrame, &state);
     if (!control) return NO;
     BOOL success = state == (expanded ? 1 : 0);
-    if (!success && CGPreflightPostEventAccess() &&
-        !CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft) &&
-        !CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonRight) &&
-        !CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonCenter)) {
+    if (!success) {
         // The exposed native overflow button advertises no AXPress action on
         // macOS 27. Click only this hit-tested control, never an inactive AX copy.
         CGRect frame = ElementFrame(control);
-        CGPoint point = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
-        CGEventRef cursor = CGEventCreate(NULL);
-        CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
-        CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
-        if (cursor && down && up) {
-            CGEventSetIntegerValueField(down, kCGEventSourceUserData, OverflowEventMarker);
-            CGEventSetIntegerValueField(up, kCGEventSourceUserData, OverflowEventMarker);
-            CGEventSetFlags(down, 0); CGEventSetFlags(up, 0);
-            CGEventPost(kCGHIDEventTap, down); CGEventPost(kCGHIDEventTap, up);
-            CGEventRef restore = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, CGEventGetLocation(cursor), kCGMouseButtonLeft);
-            if (restore) { CGEventSetFlags(restore, CGEventGetFlags(cursor)); CGEventPost(kCGHIDEventTap, restore); CFRelease(restore); }
-            success = YES; // Delivery only; the caller must verify the new state.
-        }
-        if (cursor) CFRelease(cursor);
-        if (down) CFRelease(down);
-        if (up) CFRelease(up);
+        success = PostMenuBarClick(CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame)));
     }
     CFRelease(control);
     return success;
@@ -276,7 +283,43 @@ NBMenuBarEntry *NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame)
 BOOL NBPressMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame) {
     NBMenuBarEntry *current = NBResolveMenuBarEntry(entry, screenFrame);
     if (!current || !NBMenuBarEntryIsExposed(current)) return NO;
-    return AXUIElementPerformAction((__bridge AXUIElementRef)current.element, kAXPressAction) == kAXErrorSuccess;
+    CGPoint point = CGPointMake(CGRectGetMidX(current.frame), CGRectGetMidY(current.frame));
+    CGRect bar = NBMenuBarFrameAtPoint(point);
+    if (CGRectIsNull(bar) || bar.size.height > 64) return NO;
+    return PostMenuBarClick(point);
+}
+
+NSArray<NSNumber *> *NBMenuBarInterfaceWindowIDs(NBMenuBarEntry *entry) {
+    if (!NBSameMenuBarEntry(entry, entry)) return nil;
+    NSArray *windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+    if (!windows) return nil;
+    NSMutableArray *identifiers = [NSMutableArray array];
+    for (NSDictionary *window in windows) {
+        NSNumber *identifier = window[(__bridge NSString *)kCGWindowNumber];
+        if ([window[(__bridge NSString *)kCGWindowOwnerPID] intValue] == entry.owner.processIdentifier && identifier)
+            [identifiers addObject:identifier];
+    }
+    return identifiers;
+}
+
+BOOL NBMenuBarInterfaceIsOpen(NBMenuBarEntry *entry, NSNumber *windowID) {
+    if (!NBSameMenuBarEntry(entry, entry)) return NO;
+    NSArray *windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+    if (!windows) return YES; // Preserve the original item while visibility is unknown.
+    for (NSDictionary *window in windows) {
+        if ([window[(__bridge NSString *)kCGWindowOwnerPID] intValue] != entry.owner.processIdentifier ||
+            ![windowID isEqual:window[(__bridge NSString *)kCGWindowNumber]]) continue;
+        // Follow Ice's temporary-interface lifetime rules. Ordinary-layer
+        // popovers (such as Stats) count while their owning app is active;
+        // menu/status layers count while on screen. The caller records one newly
+        // opened window, excluding both old and subsequently opened windows.
+        NSInteger layer = [window[(__bridge NSString *)kCGWindowLayer] integerValue];
+        if (layer == NSPopUpMenuWindowLevel || layer == NSPopUpMenuWindowLevel - 1 ||
+            layer == NSStatusWindowLevel || layer == NSMainMenuWindowLevel || entry.owner.isActive) return YES;
+    }
+    return NO;
 }
 
 BOOL NBMenuIsOpen(NSString *bundle) {

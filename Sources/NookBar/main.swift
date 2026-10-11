@@ -92,6 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hoverSuppressed = false
     private var emptyClickWasVisible = false
     private var temporaryBundle: String?
+    private var temporaryInterface: (entry: NBMenuBarEntry, windows: [NSNumber], window: NSNumber?)?
+    private var interfaceProbePanel: NSPanel?
     private var pointerEnteredPresentation = false
     private var pointerLeftPresentation: Date?
     private var spacingProbeItems: [NSStatusItem] = []
@@ -188,6 +190,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Task { await self.runRefreshCheck() }
             return
         }
+        if CommandLine.arguments.contains("--interface-check") {
+            Task { await self.runInterfaceCheck() }
+            return
+        }
         if CommandLine.arguments.contains("--separator-lab") {
             let lab = SeparatorLab(); separatorLab = lab; lab.show()
             return
@@ -276,7 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if (self.visibility.active || self.isPending) && !AXIsProcessTrusted() {
                     self.restore(message: "Apps restored because Accessibility access was removed.")
                 } else if bundles != self.runningBundles && self.visibilityRequested && !self.isPending && !self.arrangingIcons {
-                    if let temporary = self.temporaryBundle, NBMenuIsOpen(temporary) {
+                    if self.temporaryBundle != nil && self.temporaryInterfaceIsOpen() {
                         self.runningBundles = bundles
                     } else if self.nativeItemsRevealed {
                         self.revealNativeSection(self.presentedSection)
@@ -364,6 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         nativeItemsRevealed = false
         presentationStarted = nil
         temporaryBundle = nil
+        temporaryInterface = nil
         pointerLeftPresentation = nil
         operation += 1
         menuWatch?.invalidate()
@@ -471,12 +478,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func temporaryInterfaceIsOpen() -> Bool {
+        if let temporaryInterface {
+            return temporaryInterface.window.map { NBMenuBarInterfaceIsOpen(temporaryInterface.entry, $0) } ?? false
+        }
+        return temporaryBundle.map { NBMenuIsOpen($0) } ?? false
+    }
+
+    private func recordInteraction(_ stage: String, result: Bool? = nil) {
+        guard let index = CommandLine.arguments.firstIndex(of: "--interaction-report"), CommandLine.arguments.indices.contains(index + 1) else { return }
+        let record: [String: Any] = ["stage": stage, "result": result.map { $0 as Any } ?? NSNull(),
+            "bundle": temporaryBundle.map { $0 as Any } ?? NSNull(), "pending": isPending,
+            "beforeWindows": temporaryInterface?.windows ?? [], "window": temporaryInterface?.window.map { $0 as Any } ?? NSNull(),
+            "interfaceOpen": temporaryInterfaceIsOpen(), "visibilityActive": visibility.active]
+        guard var data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) else { return }
+        data.append(10)
+        let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+        do {
+            if !FileManager.default.fileExists(atPath: url.path) { try Data().write(to: url, options: .withoutOverwriting) }
+            let file = try FileHandle(forWritingTo: url)
+            defer { try? file.close() }
+            try file.seekToEnd(); try file.write(contentsOf: data)
+        } catch { NSLog("NookBar interaction report failed: %@", error.localizedDescription) }
+    }
+
     private func dismissTemporaryMenu() -> Bool {
         guard let bundle = temporaryBundle else { return true }
+        if temporaryInterfaceIsOpen() && !NBMenuIsOpen(bundle) {
+            setStatus("Close the item's open window or switch apps before opening another icon.")
+            return false
+        }
         guard NBCancelMenu(bundle) else { setStatus("Close the open menu before opening another icon."); return false }
         HiddenBar.restoreOverflow()
         menuWatch?.invalidate(); menuWatch = nil
         temporaryBundle = nil
+        temporaryInterface = nil
         return true
     }
 
@@ -489,7 +525,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func handleMenuBarEvent(_ event: NSEvent) {
-        guard !arrangingIcons, !NBIsOwnMenuBarOverflowEvent(event.cgEvent) else { return }
+        guard !arrangingIcons, !NBIsOwnMenuBarEvent(event.cgEvent) else { return }
         let point = NSEvent.mouseLocation
         if event.type == .leftMouseDown {
             emptyClickWasVisible = hiddenBar.isVisible || nativeItemsRevealed
@@ -739,6 +775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let generation = operation
         presentationStarted = nil
         temporaryBundle = icon.bundle
+        temporaryInterface = nil
         menuWatch?.invalidate()
         isPending = true
         let remaining = selected.intersection(currentBundles()).subtracting([icon.bundle])
@@ -750,21 +787,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             try? await Task.sleep(for: .milliseconds(300))
             guard generation == operation else { return }
             if let error { restore(message: error); return }
-            let opened = await HiddenBar.press(entry: entry, screen: screen)
+            let opened = await HiddenBar.press(entry: entry, screen: screen) { current in
+                guard generation == self.operation, let windows = NBMenuBarInterfaceWindowIDs(current) else { return false }
+                // Snapshot after revealing/expanding the item, immediately
+                // before its action, so exposure windows are not its interface.
+                self.temporaryInterface = (current, windows, nil)
+                self.recordInteraction("beforePress")
+                return true
+            }
             guard generation == operation else { return }
-            isPending = false
+            recordInteraction("pressReturned", result: opened)
             guard opened else {
                 restore(message: "This menu bar item changed or could not be opened. Apps have been restored; reopen the strip to refresh it.")
                 return
             }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard generation == operation else { return }
+            guard let context = temporaryInterface, let after = NBMenuBarInterfaceWindowIDs(context.entry) else {
+                restore(message: "The item's window state could not be read. Apps have been restored.")
+                return
+            }
+            let before = Set(context.windows)
+            temporaryInterface = (context.entry, context.windows, after.first { !before.contains($0) })
+            recordInteraction("interfaceCaptured")
+            isPending = false
             let started = Date()
             menuWatch = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, generation == self.operation else { return }
                     // Give a menu time to appear; keep the original item visible while it is open.
-                    guard Date().timeIntervalSince(started) > 1, !NBMenuIsOpen(icon.bundle) else { return }
+                    guard Date().timeIntervalSince(started) > 1, !self.temporaryInterfaceIsOpen() else { return }
+                    self.recordInteraction("interfaceClosed")
                     self.menuWatch?.invalidate(); self.menuWatch = nil
                     self.temporaryBundle = nil
+                    self.temporaryInterface = nil
                     HiddenBar.restoreOverflow()
                     self.hideSelectedApps()
                 }
@@ -798,6 +854,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         nativeItemsRevealed = false
         presentationStarted = nil
         temporaryBundle = nil
+        temporaryInterface = nil
         menuWatch?.invalidate(); menuWatch = nil
         hiddenBar.close(notify: false)
         operation += 1
@@ -1047,6 +1104,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             } catch { report["automaticCaptureError"] = error.localizedDescription; report["passed"] = false }
         } else { report["passed"] = false }
+        if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
+           let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), options: .atomic)
+        }
+        NSApp.terminate(nil)
+    }
+
+    @objc private func interfaceProbeClicked() {
+        interfaceProbePanel?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func runInterfaceCheck() async {
+        var report: [String: Any] = [:]
+        let originalFront = NSWorkspace.shared.frontmostApplication
+        let existing = NSPanel(contentRect: NSRect(x: 300, y: 300, width: 240, height: 100), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        existing.title = "NookBar existing-window probe"
+        existing.level = .normal; existing.hidesOnDeactivate = false
+        let popup = NSPanel(contentRect: NSRect(x: 600, y: 300, width: 240, height: 100), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        popup.title = "NookBar new-interface probe"
+        popup.level = .normal; popup.hidesOnDeactivate = false
+        interfaceProbePanel = popup
+        let probe = NSStatusBar.system.statusItem(withLength: 28)
+        probe.button?.image = NSImage(systemSymbolName: "29.circle", accessibilityDescription: "NookBar interface probe")
+        probe.button?.image?.isTemplate = true
+        probe.button?.setAccessibilityLabel("NookBar interface probe")
+        probe.button?.target = self; probe.button?.action = #selector(interfaceProbeClicked)
+        defer {
+            restore(message: "Interface check finished.")
+            existing.close(); popup.close(); interfaceProbePanel = nil
+            NSStatusBar.system.removeStatusItem(probe)
+            if NSApp.isActive { originalFront?.activate(options: []) }
+        }
+        existing.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        do {
+            try await Task.sleep(for: .seconds(2))
+            guard let screen = NSScreen.screens.first,
+                  let entry = NBMenuBarEntries(HiddenBar.captureFrame(for: screen)).first(where: { $0.label == "NookBar interface probe" }),
+                  let windows = NBMenuBarInterfaceWindowIDs(entry) else { throw HiddenBar.BarError.noIcons }
+            let existingWasVisible = windows.contains(NSNumber(value: existing.windowNumber))
+            let icon = HiddenBar.Icon(bundle: entry.bundle, entry: entry, label: entry.label, appName: "NookBar", image: probe.button!.image!)
+            openHiddenIcon(icon)
+            try await Task.sleep(for: .seconds(3))
+            report["legacyMenuDetection"] = NBMenuIsOpen(entry.bundle)
+            report["appActive"] = NSApp.isActive
+            report["actionObserved"] = popup.isVisible
+            let held = popup.isVisible && temporaryBundle == entry.bundle && temporaryInterfaceIsOpen() && !isPending
+            let excluded = existingWasVisible && temporaryInterface?.window != NSNumber(value: existing.windowNumber)
+            report["existingWindowExcluded"] = excluded
+            report["newNormalLayerInterfaceHeld"] = held
+            popup.orderOut(nil)
+            try await Task.sleep(for: .seconds(2))
+            let released = temporaryBundle == nil && temporaryInterface == nil && !isPending && (selected.isEmpty || visibility.active)
+            report["closedInterfaceReleased"] = released
+            report["passed"] = excluded && held && released && !NBMenuIsOpen(entry.bundle)
+        } catch { report["error"] = error.localizedDescription; report["passed"] = false }
         if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
            let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), options: .atomic)

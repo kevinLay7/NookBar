@@ -30,6 +30,13 @@ Copyright (C) 2024 Jordan Baird, GPL-3.0-or-later. NookBar uses its own region
 capture and in-place view update; Ice's per-window capture implementation is not
 used here.
 
+Native item click state and temporary-interface window tracking follow Ice's
+`Ice/MenuBar/MenuBarItems/MenuBarItemManager.swift` at the same commit, especially
+its click event creation and `TemporarilyShownItemContext` lifetime rules.
+Copyright (C) 2024 Jordan Baird, GPL-3.0-or-later. NookBar uses hit-checked event
+posting and records the first new owning-process window after activation; it
+does not use Ice's window-ID event barrier implementation.
+
 These projects are not runtime dependencies. The adapted bridge is compiled
 as part of NookBar. Apple framework names describe system dependencies and do
 not imply Apple's endorsement.

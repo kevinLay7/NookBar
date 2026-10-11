@@ -19,9 +19,10 @@ prove the installed Ice build works on this macOS version.
 | Empty-space click and secondary context menu | Global and local event handling | Physical toggle and context-menu checks, modifier combinations |
 | Hover and scroll activation | Configurable hover delay; directional scroll | Physical pointer/scroll checks, debounce, fullscreen sliding menu bar |
 | Automatic rehide | Smart, timed, focused-app strategies | Real menu-close and focused-app checks, pointer leave/re-entry, disabled rehide |
-| Bar position | Dynamic, pointer, icon settings | Each display, desktop edges, fullscreen |
+| Bar position | Dynamic, pointer, icon settings; vertical position constrained below menu bar/safe area even with a startup placeholder anchor | Each display, desktop edges, fullscreen |
+| Temporary icon/interface reveal | App-wide reveal; exact-entry native click; first-new-window tracking; owned layer-0 lifetime/existing-window exclusion and real fan-menu activation/cancellation verified | Independent per-icon reveal; configurable minimum interval; simultaneous interfaces; other app/window types; restarts and multiple instances |
 | Global shortcuts | Native registration and recorder; hidden/always-hidden/search/bar-mode actions | Cross-app execution, conflicts, key-up repeats; remaining app-menu action |
-| Icon search | Captured third-party icons; app/name/bundle filtering and keyboard navigation verified in CUA; fresh capture on reopen and three-second idle refresh preserving query/selection | Activation, selection/scroll preservation across changing result sets, always-hidden and system item coverage; eliminating native reveal during refresh |
+| Icon search | Real Stats CPU interface and selected fan-menu activation observed; native hit-checked clicks and first-new-window interface tracking; captured third-party icons; app/name/bundle filtering and keyboard navigation verified in CUA; fresh capture on reopen and three-second idle refresh preserving query/selection | Other app activation, Ice fuzzy scoring/ranking, selection/scroll preservation across changing result sets, always-hidden and system item coverage; eliminating native reveal during refresh |
 | Visible, hidden, always-hidden sections | Persistent app assignments, separate strips and native reveal verified | Physical Option activation, independent per-icon membership |
 | Drag layout and ordering | Public Arrange Icons window; button movement of Stats CPU/RAM verified in both directions, with NookBar relaunch persistence and close/re-hide checks; user verified physical CPU/RAM row dragging | Other physical row pairs; drag between sections; identity across target-app restarts; system items; each display; Command-drag reveal-all behavior |
 | Launch at login | Native Service Management option | Registration status and actual login; approval-required/error states |
@@ -57,3 +58,5 @@ See [appearance research and verification](APPEARANCE_RESEARCH.md) for rendering
 See [spacing research and verification](SPACING_RESEARCH.md) for native preference and rendering evidence.
 
 See [changing icon refresh](ICON_REFRESH.md) for native and GUI evidence and remaining capture limitations.
+
+See [activation and interface lifetime](ICON_ACTIVATION.md) for native click, window tracking, and real-app evidence.

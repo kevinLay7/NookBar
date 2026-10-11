@@ -84,12 +84,15 @@ restores them. Clock and Control Center are not selectable in this preview.
 
 The strip uses ScreenCaptureKit to sample the menu bar region while icons are visible.
 Captured icon images are retained only in memory. Screen Recording is optional for
-hiding/showing, and required for the actual icon strip. Opening a hidden item uses
-its Accessibility press action; unsupported items restore the bar instead of
-launching the app as a substitute. The original menu opens at its native menu bar
+hiding/showing, and required for the actual icon strip. Opening a hidden item sends
+a native click to its resolved, exposed menu bar position; unsupported items
+restore the bar instead of launching the app as a substitute. The original menu opens at its native menu bar
 location. Activation checks its original live Accessibility identity, owning
-process lifetime, and primary Accessibility descriptor instead of guessing its ordinal within
-the app. Missing or renamed items restore the bar and ask you to refresh. macOS
+process lifetime, and primary Accessibility descriptor instead of guessing its
+ordinal within the app. The newly opened interface is tracked by window ID:
+ordinary-layer popovers remain tracked while their app is active, and menus while
+on screen. Existing app windows are excluded. Missing or renamed items restore
+the bar and ask you to refresh. macOS
 can reuse identities for same-label replacements, so complete replacement
 isolation remains unproven. Captures are rejected if icon positions change while
 the screenshot is being taken. Tooltip values such as fan RPM can change without

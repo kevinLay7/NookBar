@@ -59,10 +59,13 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         overflowLease = nil
     }
 
-    static func press(entry: NBMenuBarEntry, screen: NSScreen) async -> Bool {
+    static func press(entry: NBMenuBarEntry, screen: NSScreen, beforePress: ((NBMenuBarEntry) -> Bool)? = nil) async -> Bool {
         let frame = captureFrame(for: screen)
         guard let current = NBResolveMenuBarEntry(entry, frame) else { return false }
-        if NBMenuBarEntryIsExposed(current) { return NBPressMenuBarEntry(entry, frame) }
+        if NBMenuBarEntryIsExposed(current) {
+            guard beforePress?(current) != false else { return false }
+            return NBPressMenuBarEntry(current, frame)
+        }
         guard overflowLease == nil, NBMenuBarOverflowState(frame) == 0 else { return false }
         let id = UUID()
         overflowLease = (id, frame)
@@ -74,7 +77,8 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return false }
             guard overflowLease?.id == id else { return false }
             if let resolved = NBResolveMenuBarEntry(entry, frame), NBMenuBarEntryIsExposed(resolved) {
-                opened = NBPressMenuBarEntry(entry, frame)
+                guard beforePress?(resolved) != false else { return false }
+                opened = NBPressMenuBarEntry(resolved, frame)
                 return opened // Keep the overflow open while the item's menu is in use.
             }
         } while Date() < deadline
@@ -237,16 +241,17 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         effect.addSubview(scroll)
         panel.contentView = effect
         let x = min(max(anchor.midX - visibleWidth / 2, screen.frame.minX + 8), screen.frame.maxX - visibleWidth - 8)
-        panel.setFrameOrigin(NSPoint(x: x, y: max(screen.visibleFrame.minY + 8, anchor.minY - height - 6)))
+        let menuHeight = max(screen.frame.maxY - screen.visibleFrame.maxY, NSStatusBar.system.thickness, screen.safeAreaInsets.top)
+        panel.setFrameOrigin(NSPoint(x: x, y: max(screen.visibleFrame.minY + 8, screen.frame.maxY - menuHeight - height - 6)))
         self.panel = panel
         panel.makeKeyAndOrderFront(nil)
         if let searchField { panel.makeFirstResponder(searchField) }
         outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard !NBIsOwnMenuBarOverflowEvent(event.cgEvent) else { return }
+            guard !NBIsOwnMenuBarEvent(event.cgEvent) else { return }
             MainActor.assumeIsolated { self?.close() }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            if NBIsOwnMenuBarOverflowEvent(event.cgEvent) { return event }
+            if NBIsOwnMenuBarEvent(event.cgEvent) { return event }
             MainActor.assumeIsolated {
                 if event.window !== self?.panel && self?.isControlWindow?(event.window) != true { self?.close() }
             }
