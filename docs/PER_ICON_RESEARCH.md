@@ -1,5 +1,58 @@
 # Per-icon backend investigation
 
+## Moderate-width follow-up (October 11)
+
+The earlier 10,000-point experiment does not rule out a divider at ordinary
+widths. A new developer-only `--width-check --report PATH` creates temporary
+R/D/L items without assigning saved positions, changes D through 24, 100, 200,
+400, 600, 800, then 24 points, and records live AX exposure. Optional
+`--width-capture-dir PATH` captures the menu bar at every stage for pixel checks.
+The normal app does not create these items or change their widths.
+
+On the built-in display with Hopper's application menus active:
+
+| Requested D width | Physical/exposure result |
+| --- | --- |
+| 24 | L, D, and R visible/exposed |
+| 100 | All three exposed; D's exposed width 102 points |
+| 200, 400, 600 | L and D absent in the actual menu image; R remains exposed |
+| 800 | Only R remains; no exposed overflow control is found |
+| Restored 24 | All three visible/exposed again; overflow collapsed |
+
+The follow-up holds D at 200 and exercises the existing overflow path. It
+observed L unexposed and R exposed, captured one real L image after automatic
+expansion, restored collapsed overflow, delivered a native click to L, and
+observed L's handler tag 101. Contracting D restored all three owned items.
+Initial and final overflow states were both 0. No app-section assignment or
+foreign icon order was changed.
+
+This is evidence of independent owned-item hiding through layout, not a public
+per-icon backend. Foreign-item movement/membership, different application-menu
+widths, displays/Spaces, width selection, visible-item preservation, and recovery
+remain required. The inaccessible overflow control at width 800 is a concrete
+reason not to adopt a fixed oversized width. Public hiding still uses the
+app-wide assessment backend.
+
+The macOS 27 SDK's `NSStatusItem.h` exposes ownership-local `visible` and the new
+expanded-interface delegate/session API, but no overflow pinning property in
+that header. `NSStatusItemExpandedInterfaceSession.h` exposes cancellation,
+without a cross-app visibility operation. These header observations do not
+establish that no other platform contract exists.
+
+REA/Hopper inspected MenuBarAgent SHA-256
+`7bb3f595fa3fba81fa62518dcb5cbc0d3faf67e63885a9f3b5903184b4141007`.
+The overview counted 14,762 procedures and 7,811 defined strings
+(`ev_3cb3e32350533874a28d4b072cfb351a64365e0ba4c95e84cd492ea98e5c280c`).
+Literal `pinned` string search and `overflow` procedure-name search returned no
+matches within those provider inventories; neither proves an API is absent
+(`ev_559fee5e8971ba29b0eefdccf54822f9febb2a52c12f2f5153d104183f4a5a37`,
+`ev_938dcb6ed2cc84568868bd9268c5dee8a18a483d059aac12918aae45aac49de0`).
+The `visibility` search found `OptimizeLeadingItemsVisibilityPass` at
+`0x1003607d0`; its returned xref points to data at `0x10038aa90`, not an established
+callable visibility implementation. Evidence:
+`ev_18b5de30769c4ce7695f39336e1db50b61a6aa14d52e69b5f1cfadbcbbf9021d`,
+`ev_763bfd5e64fe35eb9737865382d2e4051be5288b1df7f8ebb656524d345e8b37`.
+
 Environment: macOS 27.0.1 (26A434), October 11, 2026. Independent visibility and
 arrangement of multiple icons from one app remain required for full Ice parity.
 The app-wide assertion backend does not satisfy that requirement.

@@ -1,4 +1,5 @@
 import AppKit
+import ScreenCaptureKit
 @preconcurrency import ApplicationServices
 import Darwin
 @preconcurrency import NativeMenuBar
@@ -193,6 +194,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if CommandLine.arguments.contains("--interface-check") {
             Task { await self.runInterfaceCheck() }
+            return
+        }
+        if CommandLine.arguments.contains("--width-check") {
+            Task { await self.runWidthCheck() }
             return
         }
         if CommandLine.arguments.contains("--separator-lab") {
@@ -1116,6 +1121,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             } catch { report["automaticCaptureError"] = error.localizedDescription; report["passed"] = false }
         } else { report["passed"] = false }
+        if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
+           let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), options: .atomic)
+        }
+        NSApp.terminate(nil)
+    }
+
+    private func runWidthCheck() async {
+        var report: [String: Any] = [:]
+        var probes: [NSStatusItem] = []
+        for title in ["R", "D", "L"] {
+            let item = NSStatusBar.system.statusItem(withLength: 24)
+            item.button?.title = title
+            item.button?.setAccessibilityLabel("NookBar width probe \(title)")
+            item.button?.target = self; item.button?.action = #selector(probeClicked(_:))
+            item.button?.tag = title == "L" ? 101 : title == "R" ? 102 : 103
+            probes.append(item)
+        }
+        defer { for item in probes { NSStatusBar.system.removeStatusItem(item) } }
+        if let screen = NSScreen.screens.first {
+            let frame = HiddenBar.captureFrame(for: screen)
+            try? await Task.sleep(for: .seconds(2))
+            let initialOverflow = NBMenuBarOverflowState(frame)
+            report["initialOverflow"] = initialOverflow
+            var stages: [[String: Any]] = []
+            for (stage, width) in [24, 100, 200, 400, 600, 800, 24].enumerated() {
+                probes[1].length = CGFloat(width)
+                try? await Task.sleep(for: .milliseconds(900))
+                let entries = NBMenuBarEntries(frame).filter { $0.bundle == Bundle.main.bundleIdentifier && $0.label.hasPrefix("NookBar width probe") }
+                stages.append(["requestedWidth": width, "appKitWidth": probes[1].button?.window?.frame.width ?? 0,
+                    "overflow": NBMenuBarOverflowState(frame), "items": entries.map { entry in
+                        ["label": entry.label, "x": entry.frame.minX, "y": entry.frame.minY, "width": entry.frame.width,
+                         "exposed": NBMenuBarEntryIsExposed(entry)] as [String: Any]
+                    }])
+                if let index = CommandLine.arguments.firstIndex(of: "--width-capture-dir"), CommandLine.arguments.indices.contains(index + 1), CGPreflightScreenCaptureAccess() {
+                    do {
+                        let folder = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+                        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                        let image = try await SCScreenshotManager.captureImage(in: CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: 40))
+                        let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+                        try data?.write(to: folder.appendingPathComponent("stage\(stage)-\(width).png"))
+                    } catch { report["captureError"] = error.localizedDescription }
+                }
+            }
+            report["stages"] = stages
+            probes[1].length = 200
+            try? await Task.sleep(for: .seconds(1))
+            let hiddenEntries = NBMenuBarEntries(frame).filter { $0.bundle == Bundle.main.bundleIdentifier && $0.label.hasPrefix("NookBar width probe") }
+            if let left = hiddenEntries.first(where: { $0.label == "NookBar width probe L" }),
+               let right = hiddenEntries.first(where: { $0.label == "NookBar width probe R" }) {
+                report["independentHideObserved"] = !NBMenuBarEntryIsExposed(left) && NBMenuBarEntryIsExposed(right)
+                do {
+                    report["hiddenLeftCaptureCount"] = try await HiddenBar.capture(entries: [left], screen: screen).count
+                    report["captureRestoredCollapsed"] = NBMenuBarOverflowState(frame) == 0
+                    activatedProbe = nil
+                    report["leftClickDelivered"] = await HiddenBar.press(entry: left, screen: screen)
+                    try? await Task.sleep(for: .milliseconds(300))
+                    report["leftActionObserved"] = activatedProbe == 101
+                    HiddenBar.restoreOverflow()
+                    try? await Task.sleep(for: .milliseconds(300))
+                } catch { report["hiddenLeftError"] = error.localizedDescription }
+            }
+            probes[1].length = 24
+            try? await Task.sleep(for: .seconds(1))
+            let restored = NBMenuBarEntries(frame).filter { $0.bundle == Bundle.main.bundleIdentifier && $0.label.hasPrefix("NookBar width probe") }
+            report["ownedItemsRestored"] = restored.count == 3 && restored.allSatisfy { NBMenuBarEntryIsExposed($0) }
+            if initialOverflow == 0 && NBMenuBarOverflowState(frame) == 1 { _ = NBSetMenuBarOverflowExpanded(frame, false) }
+            if initialOverflow == 1 && NBMenuBarOverflowState(frame) == 0 { _ = NBSetMenuBarOverflowExpanded(frame, true) }
+            report["finalOverflow"] = NBMenuBarOverflowState(frame)
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
            let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), options: .atomic)
