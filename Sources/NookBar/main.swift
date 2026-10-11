@@ -76,7 +76,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var controlPanel: NSPanel?
     private var nativeControlAnchor: (NSRect, NSScreen)?
     private let preferences = Preferences()
-    private lazy var preferencesWindow = PreferencesWindow(preferences: preferences)
+    private lazy var appearance = MenuBarAppearance(defaults: preferences.defaults)
+    private lazy var preferencesWindow = PreferencesWindow(preferences: preferences, appearance: appearance)
     private let hotKeys = GlobalHotKeys()
     private var localBarMonitor: Any?
     private var localKeyMonitor: Any?
@@ -120,6 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settings = NSMenuItem(title: "Settings…", action: #selector(showPreferences), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
+        let appearanceItem = NSMenuItem(title: "Menu Bar Appearance…", action: #selector(showAppearance), keyEquivalent: "")
+        appearanceItem.target = self; menu.addItem(appearanceItem)
         let arrange = NSMenuItem(title: "Arrange Menu Bar Icons…", action: #selector(showArrangement), keyEquivalent: "")
         arrange.target = self
         menu.addItem(arrange)
@@ -206,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             arrangingIcons = false
             if visibilityRequested { hideSelectedApps() }
         }
+        appearance.start()
         preferencesChanged()
         refreshApps()
         runningBundles = currentBundles()
@@ -252,6 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if selected.isEmpty || CommandLine.arguments.contains("--choose-apps") { chooseApps() }
         if CommandLine.arguments.contains("--settings") { showPreferences() }
+        else if CommandLine.arguments.contains("--appearance") { showAppearance() }
         else if CommandLine.arguments.contains("--arrange-icons") {
             visibilityRequested = preferences.enabled(.hideOnLaunch) && !selected.isEmpty
             showArrangement()
@@ -276,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if arrangingIcons { arrangementWindow.show(); return true }
+        if preferencesWindow.isVisible { preferencesWindow.show(); return true }
         togglePresentation()
         return true
     }
@@ -336,13 +342,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         arrangementWindow.show()
     }
 
-    @objc private func showPreferences() {
+    @objc private func showPreferences() { openPreferences() }
+    @objc private func showAppearance() { openPreferences(tab: "Appearance") }
+    private func openPreferences(tab: String? = nil) {
         let hadTemporaryMenu = temporaryBundle != nil
         guard !isPending, dismissTemporaryMenu() else { return }
         if arrangingIcons { arrangementWindow.close() }
         if hadTemporaryMenu && visibilityRequested { hideSelectedApps() }
         hiddenBar.close()
-        preferencesWindow.show()
+        preferencesWindow.show(tab: tab)
     }
 
     private func preferencesChanged() {
@@ -866,6 +874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        appearance.stop()
         arrangementWindow.cancel()
         separatorLab?.stop()
         monitor?.invalidate()

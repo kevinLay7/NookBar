@@ -1,5 +1,6 @@
 import AppKit
 import ServiceManagement
+import SwiftUI
 
 @MainActor
 final class Preferences {
@@ -89,19 +90,23 @@ struct Shortcut: Codable, Equatable {
 }
 
 @MainActor
-final class PreferencesWindow: NSObject, NSTextFieldDelegate {
+final class PreferencesWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let preferences: Preferences
+    private let appearance: MenuBarAppearance
+    private var tabs: NSTabView?
     private var window: NSWindow?
     private let feedback = NSTextField(wrappingLabelWithString: "")
     private let shortcutFeedback = NSTextField(wrappingLabelWithString: "")
     private var loginButton: NSButton?
     private var flagButtons: [Preferences.Flag: NSButton] = [:]
+    var isVisible: Bool { window?.isVisible == true }
     var onChange: (() -> Void)?
     var onRecording: ((Bool) -> Void)?
 
-    init(preferences: Preferences) { self.preferences = preferences }
-    func show() {
+    init(preferences: Preferences, appearance: MenuBarAppearance) { self.preferences = preferences; self.appearance = appearance }
+    func show(tab: String? = nil) {
         if window == nil { build() }
+        if let tab { tabs?.selectTabViewItem(withIdentifier: tab) }
         for (flag, button) in flagButtons { button.state = preferences.enabled(flag) ? .on : .off }
         loginButton?.state = SMAppService.mainApp.status == .enabled ? .on : .off
         if SMAppService.mainApp.status == .requiresApproval {
@@ -117,7 +122,9 @@ final class PreferencesWindow: NSObject, NSTextFieldDelegate {
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "NookBar Settings"
         window.isReleasedWhenClosed = false
+        window.delegate = self
         let tabs = NSTabView(frame: window.contentView!.bounds.insetBy(dx: 18, dy: 18))
+        self.tabs = tabs
         tabs.autoresizingMask = [.width, .height]
         window.contentView!.addSubview(tabs)
         let general = makeStack()
@@ -171,9 +178,13 @@ final class PreferencesWindow: NSObject, NSTextFieldDelegate {
         shortcutFeedback.widthAnchor.constraint(equalToConstant: 470).isActive = true
         shortcuts.addArrangedSubview(shortcutFeedback)
         tab("Shortcuts", content: shortcuts, in: tabs)
+        let appearanceTab = NSTabViewItem(identifier: "Appearance"); appearanceTab.label = "Appearance"
+        appearanceTab.view = NSHostingView(rootView: AppearanceEditor(manager: appearance))
+        tabs.addTabViewItem(appearanceTab)
         self.window = window
         window.center()
     }
+    func windowWillClose(_ notification: Notification) { appearance.preview = nil }
     private func makeStack() -> NSStackView {
         let stack = NSStackView()
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 9

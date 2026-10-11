@@ -200,6 +200,28 @@ CGRect NBMenuBarFrameAtPoint(CGPoint point) {
     return result;
 }
 
+CGRect NBApplicationMenuFrame(CGRect screenFrame) {
+    if (!AXIsProcessTrusted()) return CGRectNull;
+    NSRunningApplication *app = NSWorkspace.sharedWorkspace.menuBarOwningApplication;
+    if (!app) return CGRectNull;
+    AXUIElementRef root = AXUIElementCreateApplication(app.processIdentifier);
+    AXUIElementSetMessagingTimeout(root, 0.15);
+    id menu = Attribute(root, kAXMenuBarAttribute);
+    CGRect result = CGRectNull;
+    if (menu && CFGetTypeID((__bridge CFTypeRef)menu) == AXUIElementGetTypeID()) {
+        id children = Attribute((__bridge AXUIElementRef)menu, kAXChildrenAttribute);
+        if ([children isKindOfClass:NSArray.class]) for (id child in children) {
+            AXUIElementRef element = (__bridge AXUIElementRef)child;
+            CGRect rect = ElementFrame(element);
+            if ([Attribute(element, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXMenuBarItemRole] &&
+                rect.size.width > 0 && rect.size.height > 0 && CGRectContainsRect(screenFrame, rect) &&
+                fabs(rect.origin.y - screenFrame.origin.y) < 2) result = CGRectUnion(result, rect);
+        }
+    }
+    CFRelease(root);
+    return result;
+}
+
 BOOL NBIsEmptyMenuBarPoint(CGPoint point) {
     if (CGRectIsNull(NBMenuBarFrameAtPoint(point))) return NO;
     NSRunningApplication *agent = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.MenuBarAgent"].firstObject;

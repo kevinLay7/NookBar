@@ -186,3 +186,29 @@ app lifecycle changes, and unexpected exit remain unvalidated.
   listed, including separate Stats Disk/CPU/RAM items. This validates display and
   capture for that run; original-menu activation after this change still needs a
   separate check. User interaction interrupted the attempted search selection.
+
+## Appearance follow-up, 2026-10-11
+
+- Built and signed the updated app; diagnostics and appearance persistence,
+  invalid-value normalization, split/fallback geometry, and independent end-cap
+  path checks passed. These are logic checks, not display coverage.
+- CUA selected Full and Split shapes on the built-in notched display. Independent
+  ScreenCaptureKit menu-region captures showed rounded regions, gradient tint,
+  border, shadow, and a wallpaper gap between application menus and status icons.
+  Native icons remained visible. A separate capture of the source wallpaper strip
+  contained no menu icons.
+- CUA held Light Preview for three seconds with a black solid tint while the current
+  dark profile had no tint. Independent menu-region pixel samples changed during
+  the hold (roughly RGB .227/.248/.306 to .182/.204/.251) and returned afterward.
+- Relaunch preserved dynamic profiles, solid light tint, split shape, and cap
+  selection. The updated gradient editor displayed three readable percentage
+  fields without wrapped labels; adding, editing 50% to 65%, and removing a stop
+  updated the native controls. Removing below two stops was disabled.
+- Reset returned Tint/Shape to None and Shadow/Border to off, with the status
+  “Appearance follows macOS.” The installed app was then relaunched normally. An independent AX snapshot
+  showed the six original selected apps absent, with NookBar, Stats, TaskWise,
+  and Amphetamine present; saved section membership was unchanged.
+- Pending: physical icon interaction with the appearance overlay enabled; other
+  displays; all four cap combinations; automatic system theme transitions;
+  animated wallpapers; Spaces/fullscreen; sleep/lock; permission revocation;
+  auto-hide pause/resume; and fallback-control geometry when selected apps hide.

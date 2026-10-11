@@ -38,6 +38,16 @@ click/hover/scroll activation, bar position, and smart, timed, or focused-app
 rehiding. Turn off **Show hidden icons in a separate bar** to reveal icons in the native menu
 bar instead. The default is to hide your saved selection on launch.
 
+Choose **Menu Bar Appearance…** in NookBar’s menu, or open the **Appearance** tab
+in Settings, to add a full or split shape, rounded or square ends, shadow, border,
+and solid or gradient tint. Dynamic appearance saves separate light/dark styles;
+hold **Preview** to try either style without changing the system theme. Changes
+save automatically, and **Reset** restores the original menu bar appearance.
+Shapes require Screen Recording to sample the wallpaper’s menu bar strip. These
+images stay in memory. Appearance pauses while the menu bar hides automatically.
+Full/split rendering has been checked on the built-in notched display; other
+displays, Spaces, fullscreen, and automatic theme changes still need checks.
+
 The **Shortcuts** tab records shortcuts for showing hidden icons, showing
 always-hidden icons, searching, and toggling the separate bar.
 Click a shortcut button, then press a combination containing Command, Control,

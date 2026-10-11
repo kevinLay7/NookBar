@@ -77,6 +77,27 @@ enum BehaviorChecks {
         check(ArrangementWindow.targetForDrop(source: 0, row: 4, count: 4)?.before == false, "end drop places after the last neighbor")
         check(ArrangementWindow.targetForDrop(source: 2, row: 3, count: 4) == nil, "dropping immediately after self is a no-op")
         check(ArrangementWindow.targetForDrop(source: -1, row: 0, count: 4) == nil && ArrangementWindow.targetForDrop(source: 0, row: 5, count: 4) == nil, "invalid row payloads do not target another icon")
-        print("Behavior checks passed: activation, rehide, section persistence, shortcut validation, icon search, and arrangement geometry/drop validation.")
+        var appearance = AppearanceConfiguration()
+        appearance.dynamic = true; appearance.dark.border = true; appearance.light.tint = .solid
+        appearance.dark.borderWidth = 500
+        appearance.light.tintColor = AppearanceColor(red: -1, green: .infinity, blue: 2)
+        appearance.light.stops = [AppearanceStop(color: .black, location: 2), AppearanceStop(color: .white, location: -1)]
+        appearance.save(to: defaults)
+        let restoredAppearance = AppearanceConfiguration.load(from: defaults)
+        check(restoredAppearance.style(dark: true).border && !restoredAppearance.style(dark: false).border && restoredAppearance.light.tint == .solid, "light and dark appearance profiles persist independently")
+        check(restoredAppearance.dark.borderWidth == 3 && restoredAppearance.light.tintColor == AppearanceColor(red: 0, green: 0, blue: 1) && restoredAppearance.light.stops.map(\.location) == [0, 1], "appearance input and gradient positions are bounded")
+        defaults.set(Data("invalid".utf8), forKey: "MenuBarAppearance")
+        check(AppearanceConfiguration.load(from: defaults).shape == .none && !AppearanceConfiguration.load(from: defaults).standard.hasEffect, "unreadable appearance settings restore an unchanged menu bar")
+        appearance = AppearanceConfiguration(); appearance.shape = .split
+        let barBounds = CGRect(x: 0, y: 5, width: 1000, height: 39)
+        let pieces = appearance.pieces(in: barBounds, menuWidth: 300, iconStart: 700, hasNotch: true)
+        check(pieces.count == 2 && !pieces[0].rect.intersects(pieces[1].rect) && pieces[0].rect.minY == 8.5 && pieces[0].rect.height == 32, "split appearance leaves a gap and applies the notch inset")
+        let path = AppearanceConfiguration.path(for: pieces)
+        check(path.contains(CGPoint(x: 100, y: 20)) && !path.contains(CGPoint(x: 500, y: 20)) && path.contains(CGPoint(x: 900, y: 20)), "split appearance path covers menus and icons without painting the gap")
+        check(appearance.pieces(in: barBounds, menuWidth: 800, iconStart: 700, hasNotch: true).count == 1 && appearance.pieces(in: barBounds, menuWidth: nil, iconStart: 700, hasNotch: true).count == 1, "overlapping or missing split geometry falls back to the full shape")
+        appearance.shape = .full; appearance.full.left = .square
+        let square = AppearanceConfiguration.path(for: appearance.pieces(in: barBounds, menuWidth: nil, iconStart: nil, hasNotch: true))
+        check(square.contains(CGPoint(x: 1, y: 9)) && !square.contains(CGPoint(x: 996, y: 9)), "independent square and round end caps preserve their geometry")
+        print("Behavior checks passed: activation, rehide, sections, shortcuts, search, arrangement, and appearance persistence/geometry.")
     }
 }

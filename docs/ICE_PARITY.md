@@ -28,7 +28,7 @@ prove the installed Ice build works on this macOS version.
 | Startup visibility | Saved hide-on-launch option | Signed installed-app relaunch and startup permission failure |
 | App launches/exits, sleep, lock, Spaces | Restore/resume and running-app reconciliation | Real lifecycle and multiple-display checks; fail-open restoration |
 | Menu bar spacing | Missing | Native spacing and restoration |
-| Menu bar appearance | Missing | Full/split shapes, independent end caps, inset, shadow, border width/color, solid/gradient tint, light/dark variants |
+| Menu bar appearance | Native Appearance settings and renderer: full/split shapes, independent caps, notch inset, shadow, border, solid/gradient tint, and separate light/dark profiles; actual full/split rendering and held-preview restoration verified on built-in display | Other displays, Spaces/fullscreen, automatic theme changes, moving wallpapers, permission revocation, auto-hide resume, and combinations with fallback control/hiding |
 | Hide application menus when more room is needed | Missing | Native behavior, Dock visibility and restoration |
 | Permissions and diagnostics | Accessibility and capture prompts | Revocation, stable signing, actionable errors and no stuck invisible control |
 | Updates and distribution | Public GPL source; local signed app | GitHub downloads, signing/notarization, update checks and installation |
@@ -51,3 +51,5 @@ not provide a working independent-item backend.
   analytics are required for any feature.
 - Keep unimplemented and unverified rows visible until authoritative evidence
   supports completion. The overall Ice-parity goal remains active.
+
+See [appearance research and verification](APPEARANCE_RESEARCH.md) for rendering evidence and its remaining limits.
