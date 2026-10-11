@@ -39,7 +39,7 @@ final class Preferences {
             "useBar": true, "showOnClick": true, "showOnHover": false, "showOnScroll": true,
             "autoRehide": true, "secondaryMenu": true, "hideOnLaunch": true,
             "barLocation": Location.dynamic.rawValue, "rehideStrategy": Rehide.smart.rawValue,
-            "hoverDelay": 0.2, "rehideInterval": 15.0
+            "hoverDelay": 0.2, "rehideInterval": 15.0, "tempShowInterval": 15.0
         ])
     }
     func enabled(_ flag: Flag) -> Bool { defaults.bool(forKey: flag.rawValue) }
@@ -47,8 +47,14 @@ final class Preferences {
     var rehide: Rehide { Rehide(rawValue: defaults.string(forKey: "rehideStrategy") ?? "") ?? .smart }
     var hoverDelay: Double { bounded("hoverDelay", range: 0...5, fallback: 0.2) }
     var rehideInterval: Double { bounded("rehideInterval", range: 1...300, fallback: 15) }
+    var tempShowInterval: Double { bounded("tempShowInterval", range: 0...60, fallback: 15) }
+    static func temporaryRevealRetryDelay(interfaceOpen: Bool, inputPaused: Bool) -> Double? {
+        if interfaceOpen { return 3 }
+        return inputPaused ? nil : 1
+    }
     private func bounded(_ key: String, range: ClosedRange<Double>, fallback: Double) -> Double {
-        let value = defaults.double(forKey: key)
+        guard let number = defaults.object(forKey: key) as? NSNumber else { return fallback }
+        let value = number.doubleValue
         return value.isFinite ? min(max(value, range.lowerBound), range.upperBound) : fallback
     }
     func shortcut(_ action: ShortcutAction) -> Shortcut? {
@@ -153,6 +159,15 @@ final class PreferencesWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         general.addArrangedSubview(feedback)
         feedback.widthAnchor.constraint(equalToConstant: 470).isActive = true
         tab("General", content: general, in: tabs)
+        let advanced = makeStack()
+        heading("Temporarily shown items", in: advanced)
+        number("Temporarily shown item delay (seconds)", key: "tempShowInterval", value: preferences.tempShowInterval, range: 0...60, step: 1, in: advanced)
+        let temporaryHelp = NSTextField(wrappingLabelWithString: "Wait this long before hiding an icon opened from the bar or search. Open menus remain usable until they close. Hiding also waits until mouse movement, scrolling, and held buttons or modifiers pause.")
+        temporaryHelp.widthAnchor.constraint(equalToConstant: 470).isActive = true
+        temporaryHelp.textColor = .secondaryLabelColor
+        temporaryHelp.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        advanced.addArrangedSubview(temporaryHelp)
+        tab("Advanced", content: advanced, in: tabs)
         let shortcuts = makeStack()
         heading("Keyboard shortcuts", in: shortcuts)
         let help = NSTextField(wrappingLabelWithString: "Click a shortcut, then press a key with Command, Control, or Option. Escape cancels; Delete clears it. Shortcuts work in other apps.")

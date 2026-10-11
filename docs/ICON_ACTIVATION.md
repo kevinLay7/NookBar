@@ -25,8 +25,8 @@ first new window from that owner, matching Ice's approach. Menu/status layers
 remain tracked while on screen; ordinary-layer interfaces remain tracked while
 their app is active and the window is on screen. Existing and subsequently
 opened windows do not prolong the reveal. The entry's process identity guards
-against a terminated owner. Closing the tracked interface releases the temporary
-reveal and resumes selected-app hiding. Ordinary windows without a supported
+against a terminated owner. After the minimum interval, a closed interface and
+paused input release the temporary reveal and resume selected-app hiding. Ordinary windows without a supported
 cancel action are left to the user to close or deactivate.
 
 ## Verification
@@ -57,4 +57,16 @@ cancel action are left to the user to close or deactivate.
 This does not establish all third-party app interfaces, click variants, reused
 window IDs, multiple app instances, fullscreen, other displays, or permission
 revocation. System items and independent per-icon hiding remain parity work.
-Ice's configurable temporary-show minimum interval also remains to be replicated.
+Temporary reveal now has a separate Advanced setting, `tempShowInterval`, matching
+Ice's default of 15 seconds and UI range of 0–60 seconds. After the initial
+deadline, an open interface postpones the next check by three seconds. Mouse
+movement/scrolling within 250 ms, held mouse buttons, or held modifiers postpone
+it by one second. This is independent of the general bar rehide strategy.
+Scheduling uses monotonic system uptime so wall-clock changes do not shorten it.
+
+The signed native interface check passed with the default 15-second minimum:
+after early closure the reveal remained held, and selected-app hiding resumed
+after the deadline. Isolated preference checks cover default, persistence,
+zero/max bounds, corrupt values, and retry priorities. CUA confirmed the Advanced
+tab, explanatory text, native numeric field and stepper with value 15. Physical
+zero/max timing and all active-input combinations remain unverified.

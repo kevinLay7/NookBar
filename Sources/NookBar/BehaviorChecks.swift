@@ -11,6 +11,18 @@ enum BehaviorChecks {
         func check(_ condition: @autoclosure () -> Bool, _ description: String) {
             guard condition() else { fputs("FAIL: \(description)\n", stderr); exit(1) }
         }
+        check(preferences.tempShowInterval == 15, "temporary reveal uses Ice's default")
+        defaults.set(7, forKey: "tempShowInterval")
+        check(Preferences(defaults: defaults).tempShowInterval == 7, "temporary reveal delay persists independently")
+        defaults.set(120, forKey: "tempShowInterval")
+        check(preferences.tempShowInterval == 60, "temporary reveal maximum matches Ice")
+        defaults.set(-1, forKey: "tempShowInterval")
+        check(preferences.tempShowInterval == 0, "temporary reveal supports zero")
+        defaults.set("invalid", forKey: "tempShowInterval")
+        check(preferences.tempShowInterval == 15, "corrupt delay uses the default")
+        check(Preferences.temporaryRevealRetryDelay(interfaceOpen: true, inputPaused: false) == 3, "open interfaces retry after three seconds")
+        check(Preferences.temporaryRevealRetryDelay(interfaceOpen: false, inputPaused: false) == 1, "active input retries after one second")
+        check(Preferences.temporaryRevealRetryDelay(interfaceOpen: false, inputPaused: true) == nil, "closed interface and paused input permit hiding")
         // Opening by keyboard must not immediately close because the pointer is
         // already outside. Entering then leaving the bar permits smart rehide.
         check(!preferences.shouldRehide(elapsed: 100, inside: false, pointerEntered: false), "keyboard opening remains usable")

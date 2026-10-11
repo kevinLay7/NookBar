@@ -37,6 +37,12 @@ Copyright (C) 2024 Jordan Baird, GPL-3.0-or-later. NookBar uses hit-checked even
 posting and records the first new owning-process window after activation; it
 does not use Ice's window-ID event barrier implementation.
 
+The temporary-show delay, range, and interface/input retry intervals follow
+Ice's `AdvancedSettings.swift`, `AdvancedSettingsPane.swift`, `MouseHelpers.swift`,
+and `MenuBarItemManager.swift` at the same commit. Copyright (C) 2024 Jordan
+Baird, GPL-3.0-or-later. NookBar uses native field/stepper controls and a monotonic
+deadline with the same input-pause conditions.
+
 These projects are not runtime dependencies. The adapted bridge is compiled
 as part of NookBar. Apple framework names describe system dependencies and do
 not imply Apple's endorsement.

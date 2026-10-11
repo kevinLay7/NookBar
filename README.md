@@ -92,7 +92,9 @@ process lifetime, and primary Accessibility descriptor instead of guessing its
 ordinal within the app. The newly opened interface is tracked by window ID:
 ordinary-layer popovers remain tracked while their app is active, and menus while
 on screen. Existing app windows are excluded. Missing or renamed items restore
-the bar and ask you to refresh. macOS
+the bar and ask you to refresh. **Settings → Advanced** controls the minimum
+temporary reveal delay (0–60 seconds, default 15). After that delay, hiding waits
+for the interface to close and for mouse input/modifiers to pause. macOS
 can reuse identities for same-label replacements, so complete replacement
 isolation remains unproven. Captures are rejected if icon positions change while
 the screenshot is being taken. Tooltip values such as fan RPM can change without

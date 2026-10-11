@@ -93,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var emptyClickWasVisible = false
     private var temporaryBundle: String?
     private var temporaryInterface: (entry: NBMenuBarEntry, windows: [NSNumber], window: NSNumber?)?
+    private var temporaryRehideCheckAt: Double = 0
     private var interfaceProbePanel: NSPanel?
     private var pointerEnteredPresentation = false
     private var pointerLeftPresentation: Date?
@@ -811,12 +812,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             temporaryInterface = (context.entry, context.windows, after.first { !before.contains($0) })
             recordInteraction("interfaceCaptured")
             isPending = false
-            let started = Date()
+            temporaryRehideCheckAt = ProcessInfo.processInfo.systemUptime + preferences.tempShowInterval
             menuWatch = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, generation == self.operation else { return }
-                    // Give a menu time to appear; keep the original item visible while it is open.
-                    guard Date().timeIntervalSince(started) > 1, !self.temporaryInterfaceIsOpen() else { return }
+                    let now = ProcessInfo.processInfo.systemUptime
+                    guard now >= self.temporaryRehideCheckAt else { return }
+                    let buttonsReleased = (UInt32(0)...31).allSatisfy { value in
+                        guard let button = CGMouseButton(rawValue: value) else { return true }
+                        return !CGEventSource.buttonState(.combinedSessionState, button: button)
+                    }
+                    let paused = NSEvent.modifierFlags.isEmpty && buttonsReleased &&
+                        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved) > 0.25 &&
+                        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .scrollWheel) > 0.25
+                    if let delay = Preferences.temporaryRevealRetryDelay(interfaceOpen: self.temporaryInterfaceIsOpen(), inputPaused: paused) {
+                        self.temporaryRehideCheckAt = now + delay
+                        return
+                    }
                     self.recordInteraction("interfaceClosed")
                     self.menuWatch?.invalidate(); self.menuWatch = nil
                     self.temporaryBundle = nil
@@ -1156,9 +1168,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             report["newNormalLayerInterfaceHeld"] = held
             popup.orderOut(nil)
             try await Task.sleep(for: .seconds(2))
+            let minimumHeld = preferences.tempShowInterval <= 5 || (temporaryBundle == entry.bundle && !isPending)
+            report["minimumDelayHeldAfterClosure"] = minimumHeld
+            report["minimumDelay"] = preferences.tempShowInterval
+            try await Task.sleep(for: .seconds(max(0, preferences.tempShowInterval - 5) + 4))
             let released = temporaryBundle == nil && temporaryInterface == nil && !isPending && (selected.isEmpty || visibility.active)
             report["closedInterfaceReleased"] = released
-            report["passed"] = excluded && held && released && !NBMenuIsOpen(entry.bundle)
+            report["passed"] = excluded && held && minimumHeld && released && !NBMenuIsOpen(entry.bundle)
         } catch { report["error"] = error.localizedDescription; report["passed"] = false }
         if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
            let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
