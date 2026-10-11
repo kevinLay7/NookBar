@@ -74,6 +74,27 @@ String evidence: `ev_c07711bb5991702c92142394dbd71494aa7aab36de2195e6edbcc3cbb15
 Procedure inventory: `ev_c6517eb3bb8710c478f0c5489aeb4b527c0eb4f2cb54921b679ef2cc380000b6`.
 Getter analysis: `ev_b0163118774e610c1aef192b9c0dad2551e5ecaa6fe4b17ba83b8467cf307be4`.
 
+### Architecture and forwarding-body follow-up
+
+The universal binary contains `arm64e` and `arm64e.x1` slices. REA normalizes
+both to the architecture family `arm64`; that label alone is insufficient to
+select a matching slice for independent disassembly. REA read 16 bytes at
+`0x10032f138`: `fea7c1dafc6fbaa9fa6701a9f85f02a9`. Those bytes match the
+`arm64e.x1` slice, whose function starts with `pacibsppc`. The `arm64e` slice
+has different bytes and code at that address and must not be used to interpret
+this REA address.
+
+Byte evidence: `ev_ed760f3e88b3388d57351cdd6d77a45cacdb46c464803ae10aad97407b11742f`.
+
+REA did not recognize procedures containing `0x10032f138` or `0x1003307f4`;
+requesting function analysis for the former returned no procedure. A bounded
+LLVM disassembly of the matching slice establishes that the first address has
+code and a function prologue. Its initial calls include Swift Logger metadata,
+log-object lookup, and `os_log_type_enabled`, as resolved against the slice's
+indirect-symbol table. This prefix does not establish the getter's return
+contract or its authorization checks. Continue from the matching slice; do not
+infer a usable API from the thunk or this logging prefix.
+
 These static names are leads, not proof of a usable third-party API. Runtime
 reachability, ownership checks, entitlements, identity mapping, and persistence
 are unresolved. No drag-session or utilities request was sent to MenuBarAgent.

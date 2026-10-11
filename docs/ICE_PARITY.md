@@ -36,7 +36,9 @@ prove the installed Ice build works on this macOS version.
 ## Verification rules
 
 See [per-icon research](PER_ICON_RESEARCH.md) for the wide-divider experiment,
-Accessibility limitations, and native overflow/drag leads. The experiment does
+Accessibility limitations, and native overflow/drag leads. See also the
+[application-menu investigation](APPLICATION_MENUS_RESEARCH.md), whose tested
+activation variants did not establish menu bar ownership. The divider experiment does
 not provide a working independent-item backend.
 
 - Build/logic checks cover only the branches they exercise; they are not GUI or
