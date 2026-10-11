@@ -16,7 +16,7 @@ final class SeparatorLab: NSObject, NSWindowDelegate {
     private var restorationTimer: Timer?
     private var before: [String: Int] = [:]
     private var moveTask: Task<Void, Never>?
-    private var pendingMouseUp: CGEvent?
+    private let movement = MenuBarMovement()
     private let names = ["NookBar.Lab.Right", "NookBar.Lab.Divider", "NookBar.Lab.Left"]
 
     func show() {
@@ -130,43 +130,16 @@ final class SeparatorLab: NSObject, NSWindowDelegate {
             report.stringValue = "L/R geometry is unavailable or overlaps. No movement was requested."
             return
         }
-        let start = CGPoint(x: left.frame.midX, y: left.frame.midY)
-        let targetX = left.frame.minX < right.frame.minX ? right.frame.maxX + 2 : right.frame.minX - 2
-        let end = CGPoint(x: targetX, y: right.frame.midY)
-        guard HiddenBar.captureFrame(for: screen).contains(end),
-              let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left),
-              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left) else {
-            report.stringValue = "Could not create a bounded move request."
-            return
-        }
-        down.flags = .maskCommand; up.flags = .maskCommand
-        down.setIntegerValueField(.mouseEventClickState, value: 1)
-        up.setIntegerValueField(.mouseEventClickState, value: 1)
+        let before = left.frame.minX > right.frame.minX
         report.stringValue = "Requesting native Command-drag of our L item. Verify the captured menu bar afterward."
         moveTask = Task { [weak self] in
-            guard let self, !Task.isCancelled else { return }
+            guard let self else { return }
             defer { moveTask = nil }
-            pendingMouseUp = up
-            down.post(tap: .cghidEventTap)
             do {
-                // Always release the mouse, including cancellation/window close.
-                defer { releaseMoveMouse() }
-                try await Task.sleep(for: .milliseconds(100))
-                for step in 1...10 {
-                    try Task.checkCancellation()
-                    let fraction = CGFloat(step) / 10
-                    let point = CGPoint(x: start.x + (end.x - start.x) * fraction,
-                                        y: start.y + (end.y - start.y) * fraction)
-                    guard let drag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
-                                             mouseCursorPosition: point, mouseButton: .left) else { break }
-                    drag.flags = .maskCommand
-                    drag.post(tap: .cghidEventTap)
-                    try await Task.sleep(for: .milliseconds(20))
-                }
-            } catch { return }
-            try? await Task.sleep(for: .milliseconds(750))
-            guard !Task.isCancelled else { return }
-            readState()
+                try await movement.move(left, beside: right, before: before, screen: screen)
+                readState()
+            } catch is CancellationError { }
+            catch { report.stringValue = error.localizedDescription }
         }
     }
 
@@ -212,14 +185,10 @@ final class SeparatorLab: NSObject, NSWindowDelegate {
         }
         report.stringValue = lines.joined(separator: "\n")
     }
-    private func releaseMoveMouse() {
-        pendingMouseUp?.post(tap: .cghidEventTap)
-        pendingMouseUp = nil
-    }
     func windowWillClose(_ notification: Notification) { stop() }
     func stop() {
         moveTask?.cancel()
-        releaseMoveMouse()
+        movement.cancel()
         captureGeneration += 1
         restorationTimer?.invalidate(); restorationTimer = nil
         for item in items {

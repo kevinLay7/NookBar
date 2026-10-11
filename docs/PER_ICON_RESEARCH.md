@@ -185,3 +185,15 @@ utility route or represent it as an Accessibility permission the user can enable
 4. Implement and verify independent native hiding and ordering, restoration,
    system extras, clipped icons, Spaces, and each display. Keep app-wide behavior
    labeled as partial until these requirements are met.
+
+## Public ordering follow-up
+
+The Arrange Icons window now uses live AX references to match source and target
+items, confirms their identities with a system-wide hit test, posts a bounded
+Command-drag, and verifies adjacency in a fresh query. Stats’ CPU icon moved to
+both sides of its RAM icon through the public controls. The moved order survived
+NookBar relaunch; Stats was not restarted. This establishes a foreign-item ordering
+path for that pair on the built-in display. It does not establish system-item
+movement, persistent identity across target-app restarts, physical row dragging,
+or independent item visibility. Closing the window reapplies the requested
+app-wide hidden state without changing saved section assignments.

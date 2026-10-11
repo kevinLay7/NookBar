@@ -85,6 +85,28 @@ NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame) {
     }];
 }
 
+BOOL NBMenuBarEntryMatchesPoint(NBMenuBarEntry *entry, CGPoint point) {
+    if (!entry.element || !CGRectContainsPoint(entry.frame, point)) return NO;
+    AXUIElementRef root = AXUIElementCreateSystemWide(), hit = NULL;
+    AXError error = AXUIElementCopyElementAtPosition(root, point.x, point.y, &hit);
+    CFRelease(root);
+    if (error != kAXErrorSuccess || !hit) return NO;
+    BOOL matches = NO;
+    for (NSUInteger depth = 0; hit && depth < 5; depth++) {
+        if (CFEqual(hit, (__bridge CFTypeRef)entry.element)) { matches = YES; break; }
+        id parent = Attribute(hit, kAXParentAttribute);
+        CFRelease(hit);
+        hit = parent ? (AXUIElementRef)CFRetain((__bridge CFTypeRef)parent) : NULL;
+    }
+    if (hit) CFRelease(hit);
+    return matches;
+}
+
+BOOL NBSameMenuBarEntry(NBMenuBarEntry *first, NBMenuBarEntry *second) {
+    return first.element && second.element && [first.bundle isEqual:second.bundle] &&
+        CFEqual((__bridge CFTypeRef)first.element, (__bridge CFTypeRef)second.element);
+}
+
 BOOL NBPressMenuBarEntry(NSString *bundle, NSUInteger index, CGRect screenFrame) {
     NSArray *entries = [NBMenuBarEntries(screenFrame) filteredArrayUsingPredicate:
         [NSPredicate predicateWithBlock:^BOOL(NBMenuBarEntry *entry, NSDictionary *bindings) { return [entry.bundle isEqual:bundle]; }]];

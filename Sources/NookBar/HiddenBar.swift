@@ -46,6 +46,10 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
 
     static func capture(bundles: Set<String>, screen: NSScreen) async throws -> [Icon] {
         let entries = NBMenuBarEntries(captureFrame(for: screen)).filter { bundles.contains($0.bundle) }
+        return try await capture(entries: entries)
+    }
+
+    static func capture(entries: [NBMenuBarEntry]) async throws -> [Icon] {
         guard !entries.isEmpty else { throw BarError.noIcons }
         // Only the icon rectangles' bounding strip is sampled. Images never leave memory.
         let rect = entries.reduce(CGRect.null) { $0.union($1.frame) }.integral

@@ -19,6 +19,7 @@ the two can have different Accessibility authorization.
 - Shortcuts: record, clear, and test from another app; verify conflict messages and no activation while recording.
 - Search: filter by app and icon name; use arrows, Return, and Escape; verify no-match state and separate items from one app.
 - Native reveal: disable the hidden bar, reveal selected icons, then verify each rehide strategy while an original menu is open.
+- Arrangement: reveal all icons, move a third-party icon in both directions, refresh and relaunch; confirm the native order, then close and verify the original hidden selection. Test physical row dragging, cancellation during movement, disappearing items, display disconnects, and Spaces. Restore the original native order afterward.
 - Login: enable launch at login, verify the reported registration state, and test an actual login.
 - Sections: move an app to Always Hidden; verify the normal strip excludes it and the separate strip includes it; relaunch and check persistence. Restore the original test selection afterward.
 
@@ -132,3 +133,25 @@ app lifecycle changes, and unexpected exit remain unvalidated.
 - Cancellation and termination have immediate gesture release in code; real
   interruption coverage, foreign/system items, each display, and independent
   hiding remain pending. This batch does not establish full Ice parity.
+
+## Public arrangement batch, 2026-10-11
+
+- The signed installed app’s Arrange Icons window lists live menu bar items with
+  captured icon images and a display picker. It restores all apps while open.
+- CUA selected Stats CPU and used Move Right to place it after RAM. A fresh,
+  independent AX read confirmed the changed native positions. Relaunching NookBar
+  preserved this order while the Stats process remained running.
+- Move Left returned CPU before RAM, restoring the original Disk, CPU, RAM order.
+  This run used live AX identity and a system-wide hit test to confirm both endpoints
+  before posting the native Command-drag gesture. The UI reported success and a
+  separate AX read confirmed the order.
+- Closing arrangement, then dismissing the hidden strip, left the original six
+  selected apps absent from the menu bar AX tree. UserDefaults memberships remained
+  unchanged; NookBar, Stats, TaskWise, and Amphetamine were present.
+- Build/signature/plist/diagnostics and arrangement geometry/drop planning checks
+  passed. Native drag delegate selectors are available; that does not prove physical
+  row dragging. Scoped CUA drags did not establish a row-drop event. A human test
+  remains pending, as do interruption, system items, app restarts, and other displays.
+- The separator diagnostic now shares the movement engine. Its prior owned-item
+  evidence predates this refactor; repeat that GUI check before counting it as
+  validation of the shared route. Independent per-icon hiding remains unresolved.

@@ -11,6 +11,8 @@ NSDictionary *NBMenuBarSnapshot(void);
 @property(nonatomic, readonly) CGRect frame;
 @end
 NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame);
+BOOL NBMenuBarEntryMatchesPoint(NBMenuBarEntry *entry, CGPoint point);
+BOOL NBSameMenuBarEntry(NBMenuBarEntry *first, NBMenuBarEntry *second);
 BOOL NBPressMenuBarEntry(NSString *bundle, NSUInteger index, CGRect screenFrame);
 BOOL NBMenuIsOpen(NSString *bundle);
 BOOL NBCancelMenu(NSString *bundle);

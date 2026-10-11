@@ -25,6 +25,14 @@ sections; hiding that section leaves the normal hidden section revealed. **Selec
 All** preserves apps already assigned to Always Hidden; **Clear Selection** makes
 both sections visible.
 
+Choose **Arrange Menu Bar Icons…** from NookBar’s context menu to reorder third-party
+icons. All apps are revealed while this window is open. Select an icon and use
+**Move Left** or **Move Right**; row dragging is implemented but still awaiting
+physical validation. Closing the window restores the requested hidden state.
+The display picker selects which menu bar to arrange; only the built-in display
+has been tested. System icons and dragging between visibility sections are not
+supported yet. Ordering uses macOS Command-drag and checks the resulting position.
+
 Selections are saved. **Settings…** includes hide on launch, launch at login,
 click/hover/scroll activation, bar position, and smart, timed, or focused-app
 rehiding. Turn off **Show hidden icons in a separate bar** to reveal icons in the native menu
@@ -88,7 +96,8 @@ each rebuild. Notarized public downloads are a later release milestone.
 ## Validation
 
 `./scripts/check.sh` checks the build, signature, plist, read-only diagnostics,
-and behavior regressions for rehide decisions, preferences, shortcuts, and search.
+and behavior regressions for rehide decisions, preferences, shortcuts, search,
+and arrangement geometry/drop planning. Native movement requires runtime checks.
 The native hide/restore check must run from the app bundle with its own permission:
 
 ```sh
