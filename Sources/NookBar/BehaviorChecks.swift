@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import NativeMenuBar
 
 @MainActor
 enum BehaviorChecks {
@@ -51,15 +52,18 @@ enum BehaviorChecks {
         check(AppSections(defaults: defaults).tucked.isEmpty, "clear selection clears both hidden sections")
         let image = NSImage(size: NSSize(width: 20, height: 20))
         let icons = [
-            HiddenBar.Icon(bundle: "example.amphetamine", index: 0, label: "∞", appName: "Amphetamine", image: image),
-            HiddenBar.Icon(bundle: "example.stats", index: 0, label: "CPU", appName: "Stats", image: image),
-            HiddenBar.Icon(bundle: "example.stats", index: 1, label: "RAM", appName: "Stats", image: image),
-            HiddenBar.Icon(bundle: "example.cafe", index: 0, label: "Café", appName: "Café", image: image)
+            HiddenBar.Icon(bundle: "example.amphetamine", entry: nil, label: "∞", appName: "Amphetamine", image: image),
+            HiddenBar.Icon(bundle: "example.stats", entry: nil, label: "CPU", appName: "Stats", image: image),
+            HiddenBar.Icon(bundle: "example.stats", entry: nil, label: "RAM", appName: "Stats", image: image),
+            HiddenBar.Icon(bundle: "example.cafe", entry: nil, label: "Café", appName: "Café", image: image)
         ]
         check(HiddenBar.matchingIndices(in: icons, query: "AMPH") == [0], "search finds app name behind a symbol-only icon")
         check(HiddenBar.matchingIndices(in: icons, query: " stats ") == [1, 2], "search preserves separate icons from one app")
         check(HiddenBar.matchingIndices(in: icons, query: "cafe") == [3], "search ignores accents")
         check(HiddenBar.matchingIndices(in: icons, query: "not installed").isEmpty, "missing query has no false match")
+        let unavailableEntry = NBMenuBarEntry()
+        check(!NBSameMenuBarEntry(unavailableEntry, unavailableEntry), "an entry without live AX identity cannot match itself")
+        check(NBResolveMenuBarEntry(unavailableEntry, CGRect(x: 0, y: 0, width: 100, height: 39)) == nil, "a missing identity never resolves by ordinal or label")
         check(ArrangementWindow.instancesRespond(to: NSSelectorFromString("tableView:pasteboardWriterForRow:")) && ArrangementWindow.instancesRespond(to: NSSelectorFromString("tableView:acceptDrop:row:dropOperation:")), "native table exposes its drag source and drop handlers")
         let source = CGRect(x: 100, y: 5, width: 24, height: 24)
         let target = CGRect(x: 150, y: 5, width: 24, height: 24)

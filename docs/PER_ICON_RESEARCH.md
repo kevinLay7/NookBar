@@ -197,3 +197,26 @@ path for that pair on the built-in display. It does not establish system-item
 movement, persistent identity across target-app restarts, physical row dragging,
 or independent item visibility. Closing the window reapplies the requested
 app-wide hidden state without changing saved section assignments.
+
+## Captured item identity limits
+
+Strip activation now retains the original AX entry and checks live identity,
+process launch date, and description. It no longer selects the nth item from an
+app, which could open another item after ordering changes. A fresh entry must
+match uniquely on the chosen display. Captures also reject changed positions
+between discovery and screenshot completion.
+
+A controlled native diagnostic created an item, removed it, and then created
+another with the same label. Removal made the old entry unresolvable, but the
+same-label replacement reused its AX identity. `CFEqual` therefore cannot prove
+item lifetime isolation within one process. The explicit report flags
+`sameLabelReplacementRejected` and `identityIsolationProven` remain false; no
+unique persistent identifier or replacement-proof item membership is claimed.
+
+A read-only AXObserver probe on NookBar and all three Stats items returned -25207
+(`kAXErrorNotificationUnsupported`) for destroyed, layout-changed, and created
+subscriptions. Apple documents this return value for unsupported observations
+([AXObserverAddNotification](https://developer.apple.com/documentation/applicationservices/1462089-axobserveraddnotification)).
+This runtime provides no tested notification path for that invalidation. Further
+research is required; polling cannot prove that a remove/recreate cycle did not
+occur entirely between reads.

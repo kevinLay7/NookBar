@@ -27,8 +27,8 @@ both sections visible.
 
 Choose **Arrange Menu Bar Icons…** from NookBar’s context menu to reorder third-party
 icons. All apps are revealed while this window is open. Select an icon and use
-**Move Left** or **Move Right**; row dragging is implemented but still awaiting
-physical validation. Closing the window restores the requested hidden state.
+**Move Left** or **Move Right**, or drag its row. Movement buttons and physical
+row dragging have been verified with Stats’ CPU/RAM icons. Closing the window restores the requested hidden state.
 The display picker selects which menu bar to arrange; only the built-in display
 has been tested. System icons and dragging between visibility sections are not
 supported yet. Ordering uses macOS Command-drag and checks the resulting position.
@@ -61,7 +61,12 @@ Captured icon images are retained only in memory. Screen Recording is optional f
 hiding/showing, and required for the actual icon strip. Opening a hidden item uses
 its Accessibility press action; unsupported items restore the bar instead of
 launching the app as a substitute. The original menu opens at its native menu bar
-location. A first capture briefly reveals selected icons; cached images are refreshed
+location. Activation checks its original live Accessibility identity, owning
+process lifetime, and captured description instead of guessing its ordinal within
+the app. Missing or renamed items restore the bar and ask you to refresh. macOS
+can reuse identities for same-label replacements, so complete replacement
+isolation remains unproven. Captures are rejected if icon positions change while
+the screenshot is being taken. A first capture briefly reveals selected icons; cached images are refreshed
 when the strip is rebuilt.
 
 ## Build

@@ -155,3 +155,34 @@ app lifecycle changes, and unexpected exit remain unvalidated.
 - The separator diagnostic now shares the movement engine. Its prior owned-item
   evidence predates this refactor; repeat that GUI check before counting it as
   validation of the shared route. Independent per-icon hiding remains unresolved.
+
+## Item identity and physical drag follow-up, 2026-10-11
+
+- The user reported that dragging Stats CPU above RAM changes the native menu bar
+  to match. This is physical evidence for that pair; system items, cross-section
+  dragging, interruption, and other displays remain pending.
+- Captured icons now retain their live AX entries, and activation resolves the
+  original item rather than its ordinal in the owning app. Matching also requires
+  the same process launch date and description. A missing or renamed item restores
+  visibility and clears the cached strip.
+- Capture now checks that every item retains its identity and frame after the
+  screenshot completes, rejecting a strip assembled while its layout changed.
+- The signed runtime identity diagnostic verified own and foreign hide/reveal
+  matching, rejected a removed temporary item while preserving the remaining
+  NookBar item, and discovered a limitation: a same-label replacement can reuse
+  its old AX identity. The report records this separately as
+  `sameLabelReplacementRejected: false` and `identityIsolationProven: false`.
+  A passing baseline self-test must not be read as complete identity isolation.
+- Read-only subscription probes returned `kAXErrorNotificationUnsupported`
+  (-25207) for destroyed, layout-changed, and created notifications on the NookBar
+  and Stats menu items. No notification-based invalidation is claimed.
+
+- The final signed report also passed renamed-item rejection, icon capture with
+  frame validation, foreign TaskWise hide/reveal identity checks, repeated toggles,
+  and cancellation restoration. The installed app was automatically relaunched
+  normally after the diagnostic; an independent snapshot showed the six original
+  selected apps hidden and the other third-party apps present.
+- CUA opened the hidden strip and then Search. All eleven third-party icons were
+  listed, including separate Stats Disk/CPU/RAM items. This validates display and
+  capture for that run; original-menu activation after this change still needs a
+  separate check. User interaction interrupted the attempted search selection.

@@ -13,7 +13,7 @@ prove the installed Ice build works on this macOS version.
 | Capability | Current implementation | Evidence still required |
 | --- | --- | --- |
 | Hide/reveal selected items | App-wide native backend | Independent control of multiple icons from one app, system icons, per-display verification |
-| Hidden icon strip | Actual captured icons, separate buttons | Refresh of changing icons; clipped/notch items; all click variants; menus and custom popovers |
+| Hidden icon strip | Actual captured icons, separate buttons | Refresh of changing icons; same-label replacement identity reuse; clipped/notch items; all click variants; menus and custom popovers |
 | Native menu bar reveal instead of strip | Both sections' reveal/toggle behavior verified through app controls and independent AX snapshots | Physical tray click and each automatic rehide strategy |
 | Control icon | Native tray plus N fallback | All displays, fullscreen, automatic menu bar hiding, custom/show/hide icon options |
 | Empty-space click and secondary context menu | Global and local event handling | Physical toggle and context-menu checks, modifier combinations |
@@ -23,7 +23,7 @@ prove the installed Ice build works on this macOS version.
 | Global shortcuts | Native registration and recorder; hidden/always-hidden/search/bar-mode actions | Cross-app execution, conflicts, key-up repeats; remaining app-menu action |
 | Icon search | Captured third-party icons; app/name/bundle filtering and keyboard navigation verified in CUA | Activation, changing-icon refresh, always-hidden and system item coverage |
 | Visible, hidden, always-hidden sections | Persistent app assignments, separate strips and native reveal verified | Physical Option activation, independent per-icon membership |
-| Drag layout and ordering | Public Arrange Icons window; button movement of Stats CPU/RAM verified in both directions, with NookBar relaunch persistence and close/re-hide checks | Physical row dragging; drag between sections; identity across target-app restarts; system items; each display; Command-drag reveal-all behavior |
+| Drag layout and ordering | Public Arrange Icons window; button movement of Stats CPU/RAM verified in both directions, with NookBar relaunch persistence and close/re-hide checks; user verified physical CPU/RAM row dragging | Other physical row pairs; drag between sections; identity across target-app restarts; system items; each display; Command-drag reveal-all behavior |
 | Launch at login | Native Service Management option | Registration status and actual login; approval-required/error states |
 | Startup visibility | Saved hide-on-launch option | Signed installed-app relaunch and startup permission failure |
 | App launches/exits, sleep, lock, Spaces | Restore/resume and running-app reconciliation | Real lifecycle and multiple-display checks; fail-open restoration |

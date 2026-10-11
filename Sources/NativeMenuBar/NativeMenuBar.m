@@ -17,6 +17,8 @@ static id Attribute(AXUIElementRef element, CFStringRef key) {
 @property(nonatomic, readwrite) NSString *label;
 @property(nonatomic, readwrite) CGRect frame;
 @property(nonatomic, strong) id element;
+@property(nonatomic, strong) NSRunningApplication *owner;
+@property(nonatomic, strong) NSDate *launchDate;
 @end
 @implementation NBMenuBarEntry
 @end
@@ -46,6 +48,7 @@ static void CollectEntries(AXUIElementRef element, CGRect screen, CGRect region,
             NSString *key = [NSString stringWithFormat:@"%@:%@", app.bundleIdentifier, NSStringFromRect(frame)];
             NBMenuBarEntry *entry = [NBMenuBarEntry new];
             entry.bundle = app.bundleIdentifier; entry.frame = frame; entry.element = (__bridge id)element;
+            entry.owner = app; entry.launchDate = app.launchDate;
             NSString *title = Attribute(element, kAXDescriptionAttribute);
             if (!title.length) title = Attribute(element, kAXTitleAttribute);
             if (!title.length) title = Attribute(element, kAXHelpAttribute);
@@ -103,16 +106,28 @@ BOOL NBMenuBarEntryMatchesPoint(NBMenuBarEntry *entry, CGPoint point) {
 }
 
 BOOL NBSameMenuBarEntry(NBMenuBarEntry *first, NBMenuBarEntry *second) {
-    return first.element && second.element && [first.bundle isEqual:second.bundle] &&
+    return first.element && second.element && first.owner && second.owner &&
+        !first.owner.isTerminated && !second.owner.isTerminated &&
+        first.owner.processIdentifier == second.owner.processIdentifier &&
+        first.launchDate && [first.launchDate isEqualToDate:second.launchDate] &&
+        [first.bundle isEqual:second.bundle] &&
         CFEqual((__bridge CFTypeRef)first.element, (__bridge CFTypeRef)second.element);
 }
 
-BOOL NBPressMenuBarEntry(NSString *bundle, NSUInteger index, CGRect screenFrame) {
-    NSArray *entries = [NBMenuBarEntries(screenFrame) filteredArrayUsingPredicate:
-        [NSPredicate predicateWithBlock:^BOOL(NBMenuBarEntry *entry, NSDictionary *bindings) { return [entry.bundle isEqual:bundle]; }]];
-    if (index >= entries.count) return NO;
-    NBMenuBarEntry *entry = entries[index];
-    return AXUIElementPerformAction((__bridge AXUIElementRef)entry.element, kAXPressAction) == kAXErrorSuccess;
+NBMenuBarEntry *NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame) {
+    NSArray *matches = [NBMenuBarEntries(screenFrame) filteredArrayUsingPredicate:
+        [NSPredicate predicateWithBlock:^BOOL(NBMenuBarEntry *candidate, NSDictionary *bindings) {
+            return NBSameMenuBarEntry(candidate, entry) && [candidate.label isEqual:entry.label];
+        }]];
+    // Reject missing, ambiguous, renamed, or restarted items without guessing an
+    // ordinal. macOS may still reuse an AX identity for same-label replacements.
+    return matches.count == 1 ? matches.firstObject : nil;
+}
+
+BOOL NBPressMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame) {
+    NBMenuBarEntry *current = NBResolveMenuBarEntry(entry, screenFrame);
+    if (!current) return NO;
+    return AXUIElementPerformAction((__bridge AXUIElementRef)current.element, kAXPressAction) == kAXErrorSuccess;
 }
 
 BOOL NBMenuIsOpen(NSString *bundle) {

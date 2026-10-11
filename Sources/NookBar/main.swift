@@ -656,7 +656,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func openHiddenIcon(_ icon: HiddenBar.Icon) {
-        guard let (_, screen) = barAnchor() else { showAll(); return }
+        guard let entry = icon.entry, let (_, screen) = barAnchor() else { showAll(); return }
         operation += 1
         let generation = operation
         presentationStarted = nil
@@ -672,8 +672,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             try? await Task.sleep(for: .milliseconds(300))
             guard generation == operation else { return }
             isPending = false
-            guard error == nil, NBPressMenuBarEntry(icon.bundle, UInt(icon.index), HiddenBar.captureFrame(for: screen)) else {
-                restore(message: error ?? "Could not open this menu bar item. Apps have been restored.")
+            guard error == nil, NBPressMenuBarEntry(entry, HiddenBar.captureFrame(for: screen)) else {
+                restore(message: error ?? "This menu bar item changed or could not be opened. Apps have been restored; reopen the strip to refresh it.")
                 return
             }
             let started = Date()
@@ -888,6 +888,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         try? await Task.sleep(for: .seconds(2))
         let before = snapshot()
         report["before"] = before.counts
+        let identityScreen = NSScreen.screens.first.map(HiddenBar.captureFrame(for:))
+        let originalEntries = identityScreen.map { NBMenuBarEntries($0).filter { !$0.bundle.hasPrefix("com.apple.") } } ?? []
         if let screen = NSScreen.screens.first {
             let entries = NBMenuBarEntries(HiddenBar.captureFrame(for: screen))
             let keys = entries.map { "\($0.bundle):\($0.frame)" }
@@ -908,11 +910,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             try? await Task.sleep(for: .seconds(2))
             let during = snapshot()
             report["during"] = during.counts
+            if let frame = identityScreen, let entry = originalEntries.first(where: { $0.bundle == own }) {
+                report["hiddenIdentityRejected"] = NBResolveMenuBarEntry(entry, frame) == nil
+            }
             report["activationError"] = error ?? NSNull()
             visibility.restore()
             try? await Task.sleep(for: .seconds(2))
             let after = snapshot()
             report["after"] = after.counts
+            if let frame = identityScreen {
+                report["liveIdentitiesRestored"] = !originalEntries.isEmpty && originalEntries.allSatisfy {
+                    NBResolveMenuBarEntry($0, frame) != nil
+                }
+            }
             let hidden = during.error == nil && during.counts[own] == nil && !during.counts.isEmpty
             let restored = after.error == nil && after.counts[own] == before.counts[own]
             let preserved = before.counts.filter { !$0.key.hasPrefix("com.apple.") && $0.key != own }.allSatisfy {
@@ -931,9 +941,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let controlAvailable = otherSnapshot.counts[own] == before.counts[own] || controlPanel?.isVisible == true
                 report["ownControlAvailable"] = controlAvailable
                 report["otherTarget"] = other
+                let otherEntries = originalEntries.filter { $0.bundle == other }
+                if let frame = identityScreen {
+                    report["foreignHiddenIdentityRejected"] = !otherEntries.isEmpty && otherEntries.allSatisfy { NBResolveMenuBarEntry($0, frame) == nil }
+                }
                 visibility.restore()
                 controlPanel?.orderOut(nil); controlPanel = nil
                 try? await Task.sleep(for: .milliseconds(500))
+                if let frame = identityScreen {
+                    report["foreignIdentityRestored"] = !otherEntries.isEmpty && otherEntries.allSatisfy { NBResolveMenuBarEntry($0, frame) != nil }
+                }
                 passed = passed && otherError == nil && otherSnapshot.counts[other] == nil && controlAvailable
             }
             if passed {
@@ -960,7 +977,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 passed = passed && repeated && cancellationPassed
             }
         }
-        report["passed"] = passed
+        if passed, let frame = identityScreen {
+            let testItem = NSStatusBar.system.statusItem(withLength: 26)
+            testItem.button?.title = "ID"
+            testItem.button?.setAccessibilityLabel("NookBar identity test")
+            try? await Task.sleep(for: .milliseconds(500))
+            let stale = NBMenuBarEntries(frame).first { $0.bundle == own && $0.label == "NookBar identity test" }
+            NSStatusBar.system.removeStatusItem(testItem)
+            try? await Task.sleep(for: .milliseconds(500))
+            let staleRejected = stale.map { NBResolveMenuBarEntry($0, frame) == nil } ?? false
+            let livePreserved = originalEntries.first(where: { $0.bundle == own }).map { NBResolveMenuBarEntry($0, frame) != nil } ?? false
+            report["removedIdentityRejected"] = staleRejected
+            report["remainingIdentityPreserved"] = livePreserved
+            let replacement = NSStatusBar.system.statusItem(withLength: 26)
+            replacement.button?.title = "ID"
+            replacement.button?.setAccessibilityLabel("NookBar identity test")
+            try? await Task.sleep(for: .milliseconds(500))
+            let fresh = NBMenuBarEntries(frame).first { $0.bundle == own && $0.label == "NookBar identity test" }
+            let replacementRejected = stale.map { NBResolveMenuBarEntry($0, frame) == nil } ?? false
+            let freshAccepted = fresh.map { NBResolveMenuBarEntry($0, frame) != nil } ?? false
+            replacement.button?.setAccessibilityLabel("NookBar renamed identity test")
+            try? await Task.sleep(for: .milliseconds(500))
+            let renamedRejected = fresh.map { NBResolveMenuBarEntry($0, frame) == nil } ?? false
+            NSStatusBar.system.removeStatusItem(replacement)
+            report["sameLabelReplacementRejected"] = replacementRejected
+            report["replacementIdentityAvailable"] = freshAccepted
+            report["renamedIdentityRejected"] = renamedRejected
+            // Record the same-label ABA case as a limitation of the macOS AX
+            // interface, separately from supported hide/reveal and removal checks.
+            report["identityIsolationProven"] = replacementRejected
+            passed = passed && staleRejected && livePreserved && freshAccepted && renamedRejected
+        }
+        if let rejected = report["foreignHiddenIdentityRejected"] as? Bool { passed = passed && rejected }
+        if let restored = report["foreignIdentityRestored"] as? Bool { passed = passed && restored }
+        if let rejected = report["hiddenIdentityRejected"] as? Bool { passed = passed && rejected }
+        if let restored = report["liveIdentitiesRestored"] as? Bool { passed = passed && restored }
         if let discovered = report["entryDiscovery"] as? Bool { passed = passed && discovered }
         if let captured = report["iconCapture"] as? Bool { passed = passed && captured }
         report["passed"] = passed

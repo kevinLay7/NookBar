@@ -6,7 +6,7 @@ import ScreenCaptureKit
 final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     struct Icon {
         let bundle: String
-        let index: Int
+        let entry: NBMenuBarEntry?
         let label: String
         let appName: String
         let image: NSImage
@@ -54,17 +54,19 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         // Only the icon rectangles' bounding strip is sampled. Images never leave memory.
         let rect = entries.reduce(CGRect.null) { $0.union($1.frame) }.integral
         let image = try await SCScreenshotManager.captureImage(in: rect)
+        let current = NBMenuBarEntries(rect)
+        guard entries.allSatisfy({ entry in
+            let matches = current.filter { NBSameMenuBarEntry($0, entry) }
+            return matches.count == 1 && matches[0].frame == entry.frame
+        }) else { throw BarError.changedIcons }
         let sx = CGFloat(image.width) / rect.width, sy = CGFloat(image.height) / rect.height
-        var indices: [String: Int] = [:]
         return try entries.map { entry in
-            let index = indices[entry.bundle, default: 0]
-            indices[entry.bundle] = index + 1
             let crop = CGRect(x: (entry.frame.minX - rect.minX) * sx,
                               y: (entry.frame.minY - rect.minY) * sy,
                               width: entry.frame.width * sx, height: entry.frame.height * sy).integral
             guard let cg = image.cropping(to: crop) else { throw BarError.noIcons }
             let appName = NSRunningApplication.runningApplications(withBundleIdentifier: entry.bundle).first?.localizedName ?? entry.label
-            return Icon(bundle: entry.bundle, index: index, label: entry.label, appName: appName,
+            return Icon(bundle: entry.bundle, entry: entry, label: entry.label, appName: appName,
                         image: NSImage(cgImage: cg, size: entry.frame.size))
         }
     }
@@ -220,8 +222,13 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     }
 
     enum BarError: LocalizedError {
-        case noIcons
-        var errorDescription: String? { "Could not capture the selected menu bar icons on this display. Show All, then try again." }
+        case noIcons, changedIcons
+        var errorDescription: String? {
+            switch self {
+            case .noIcons: "Could not capture the selected menu bar icons on this display. Show All, then try again."
+            case .changedIcons: "The menu bar changed while its icons were being captured. Refresh or reopen the strip."
+            }
+        }
     }
 }
 
