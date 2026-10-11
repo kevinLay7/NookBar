@@ -92,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var cachedIncludesVisible = false
     private var pointerEnteredPresentation = false
     private var pointerLeftPresentation: Date?
+    private var separatorLab: SeparatorLab?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -152,6 +153,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if CommandLine.arguments.contains("--self-test") {
             Task { await self.runSelfTest() }
+            return
+        }
+        if CommandLine.arguments.contains("--separator-lab") {
+            let lab = SeparatorLab(); separatorLab = lab; lab.show()
             return
         }
         promptForAccessibility()
@@ -835,6 +840,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        separatorLab?.stop()
         monitor?.invalidate()
         behaviorTimer?.invalidate()
         hotKeys.stop()

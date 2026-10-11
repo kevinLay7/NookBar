@@ -110,6 +110,11 @@ macOS 27 no longer exposes the per-icon windows used by older tools. The propose
 backend uses a private system framework, whose behavior can change. Multiple
 icons belonging to one app may share visibility, and system items have limitations.
 Read [the investigation](docs/ice-investigation.txt) for observed facts and remaining checks.
+Independent item control is still under investigation; see
+[the per-icon research](docs/PER_ICON_RESEARCH.md). Developers can reproduce the
+reversible divider experiment by launching the signed app with `--separator-lab`.
+Quit other NookBar copies first. This diagnostic never changes saved section
+assignments, and is not used by normal launches.
 
 ## License and research
 

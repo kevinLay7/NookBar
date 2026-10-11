@@ -35,6 +35,10 @@ prove the installed Ice build works on this macOS version.
 
 ## Verification rules
 
+See [per-icon research](PER_ICON_RESEARCH.md) for the wide-divider experiment,
+Accessibility limitations, and native overflow/drag leads. The experiment does
+not provide a working independent-item backend.
+
 - Build/logic checks cover only the branches they exercise; they are not GUI or
   per-display evidence. `scripts/check.sh` and `--self-test` have different scopes.
 - A successful private-API callback or `NSPanel.isVisible` is not proof that a

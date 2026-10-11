@@ -102,3 +102,15 @@ app lifecycle changes, and unexpected exit remain unvalidated.
   persistence, system/control exclusions, and Select All/Clear Selection behavior.
   Physical Option-click, automatic rehide, independent icons from one app, and
   multi-display behavior remain unverified.
+
+## Per-icon backend research, 2026-10-11
+
+- The signed app's developer-only divider diagnostic expanded a temporary
+  empty/disabled status item to a requested 10,000 points. A settled menu-region
+  image showed the other icons remained visible; the prototype did not collapse
+  icons to its left.
+- Contracted and removed all diagnostic items through CUA. A fresh independent
+  snapshot showed one NookBar item and all third-party app occurrences restored.
+- Build, signature, plist, diagnostics, and behavior checks pass. This batch
+  adds a reproducible diagnostic, not completed per-icon layout or hiding.
+- See `PER_ICON_RESEARCH.md` for bounded conclusions and remaining native API work.
