@@ -18,6 +18,13 @@ icons from the same app share one selection.
 6. Click NookBar again, click outside, or press Escape to close the strip. Right-click
    NookBar for settings; **Show All Apps** restores all selected icons.
 
+When selected icons are inside macOS’s native overflow, NookBar briefly expands
+the chevron to capture their actual images, then closes it before showing the
+strip. Selecting an overflow icon expands it again while its menu is in use.
+An overflow bar you already opened stays open during capture. This path has been
+verified with 24 native test icons on the built-in display; other apps, system
+extras, and other displays still need coverage.
+
 Option-click NookBar to open the always-hidden section. You can also use
 **Always-Hidden Icons…** in its menu or the app picker. The normal strip excludes
 always-hidden apps. In native menu bar mode, showing Always Hidden reveals both

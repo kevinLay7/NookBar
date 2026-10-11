@@ -25,6 +25,7 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     private var filteredIndices: [Int] = []
     private var searchSelection = 0
     private(set) var isSearching = false
+    private static var overflowLease: (id: UUID, frame: CGRect)?
     func contains(_ point: NSPoint) -> Bool { panel?.isVisible == true && panel?.frame.contains(point) == true }
 
     static func matchingIndices(in icons: [Icon], query: String) -> [Int] {
@@ -46,7 +47,66 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
 
     static func capture(bundles: Set<String>, screen: NSScreen) async throws -> [Icon] {
         let entries = NBMenuBarEntries(captureFrame(for: screen)).filter { bundles.contains($0.bundle) }
-        return try await capture(entries: entries)
+        return try await capture(entries: entries, screen: screen)
+    }
+
+    static func restoreOverflow() {
+        guard let lease = overflowLease else { return }
+        _ = NBSetMenuBarOverflowExpanded(lease.frame, false)
+        overflowLease = nil
+    }
+
+    static func press(entry: NBMenuBarEntry, screen: NSScreen) async -> Bool {
+        let frame = captureFrame(for: screen)
+        guard let current = NBResolveMenuBarEntry(entry, frame) else { return false }
+        if NBMenuBarEntryIsExposed(current) { return NBPressMenuBarEntry(entry, frame) }
+        guard overflowLease == nil, NBMenuBarOverflowState(frame) == 0 else { return false }
+        let id = UUID()
+        overflowLease = (id, frame)
+        var opened = false
+        defer { if !opened && overflowLease?.id == id { restoreOverflow() } }
+        guard NBSetMenuBarOverflowExpanded(frame, true) else { return false }
+        let deadline = Date().addingTimeInterval(2)
+        repeat {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return false }
+            guard overflowLease?.id == id else { return false }
+            if let resolved = NBResolveMenuBarEntry(entry, frame), NBMenuBarEntryIsExposed(resolved) {
+                opened = NBPressMenuBarEntry(entry, frame)
+                return opened // Keep the overflow open while the item's menu is in use.
+            }
+        } while Date() < deadline
+        return false
+    }
+
+    static func capture(entries: [NBMenuBarEntry], screen: NSScreen) async throws -> [Icon] {
+        if entries.allSatisfy({ NBMenuBarEntryIsExposed($0) }) { return try await capture(entries: entries) }
+        let frame = captureFrame(for: screen)
+        guard overflowLease == nil, NBMenuBarOverflowState(frame) == 0 else { throw BarError.obscuredIcons }
+        let id = UUID()
+        overflowLease = (id, frame)
+        defer { if overflowLease?.id == id { restoreOverflow() } }
+        guard NBSetMenuBarOverflowExpanded(frame, true) else { throw BarError.obscuredIcons }
+        let deadline = Date().addingTimeInterval(2)
+        var ready: [NBMenuBarEntry]?
+        repeat {
+            try await Task.sleep(for: .milliseconds(100))
+            guard overflowLease?.id == id else { throw BarError.changedIcons }
+            let current = NBMenuBarEntries(frame).filter { candidate in entries.contains { NBSameMenuBarEntry($0, candidate) } }
+            if current.count == entries.count && entries.allSatisfy({ original in
+                let matches = current.filter { NBSameMenuBarEntry($0, original) && $0.label == original.label }
+                return matches.count == 1 && NBMenuBarEntryIsExposed(matches[0])
+            }) { ready = current; break }
+        } while Date() < deadline
+        guard let ready else { throw BarError.obscuredIcons }
+        let icons = try await capture(entries: ready)
+        guard overflowLease?.id == id, NBSetMenuBarOverflowExpanded(frame, false) else { throw BarError.overflowRestore }
+        let restoreDeadline = Date().addingTimeInterval(2)
+        repeat {
+            try await Task.sleep(for: .milliseconds(100))
+            guard overflowLease?.id == id else { throw BarError.changedIcons }
+            if NBMenuBarOverflowState(frame) == 0 { overflowLease = nil; return icons }
+        } while Date() < restoreDeadline
+        throw BarError.overflowRestore
     }
 
     static func capture(entries: [NBMenuBarEntry]) async throws -> [Icon] {
@@ -223,12 +283,13 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     }
 
     enum BarError: LocalizedError {
-        case noIcons, changedIcons, obscuredIcons
+        case noIcons, changedIcons, obscuredIcons, overflowRestore
         var errorDescription: String? {
             switch self {
             case .noIcons: "Could not capture the selected menu bar icons on this display. Show All, then try again."
             case .changedIcons: "The menu bar changed while its icons were being captured. Refresh or reopen the strip."
             case .obscuredIcons: "Some selected icons are in macOS’s overflow or covered by another window. Expand them with the menu bar’s chevron, then reopen NookBar."
+            case .overflowRestore: "The native overflow bar could not be restored after capture. Apps have been left visible; close the overflow bar and try again."
             }
         }
     }

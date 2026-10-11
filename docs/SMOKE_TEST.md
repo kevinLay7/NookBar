@@ -270,3 +270,37 @@ app lifecycle changes, and unexpected exit remain unvalidated.
   retaining all collapsed identities, physical activation under overflow, other
   displays, and replacement-proof identity. This regression proves exposure
   rejection and visible capture on this display, not full Ice parity.
+
+### Automatic native overflow capture and activation — October 11, 2026
+
+- Discovery now retains all 24 probe identities instead of one collapsed-frame
+  representative. The native expanded bar physically displayed S24–S4 to the
+  left of the notch; their center hits matched their actual AX identities.
+- The installed app's `--overflow-probe --overflow-check --report PATH` checks
+  direct collapsed capture rejection, 24-icon expanded capture, already-open
+  state preservation, automatic 24-icon capture with verified collapse, and
+  reopening/pressing S24's actual native button action followed by restoration.
+  Each stage has its own report fields; overall `passed` requires every stage.
+- The automatic-path report returned `automaticCaptureCount: 24`,
+  `automaticRestoredOverflow: 0`, `activationMatched: true`, and
+  `activationRestoredOverflow: 0`. The optional `--overflow-strip-preview`
+  showed all 24 captured numbered icons below the collapsed native menu bar;
+  the physical image was inspected.
+- Quit the normal NookBar before launching these developer flags. The probes
+  disappear on termination and do not change saved section assignments or
+  preferred positions. Relaunch the normal signed app after the diagnostic.
+- Pending: foreign overflow menus/popovers, system extras, other displays,
+  Spaces/fullscreen, pointer/modifier interruption, permission loss, restoration
+  failure, cancellation, and same-label replacement isolation. Owned capture
+  and activation do not prove these cases or full Ice parity.
+
+- The updated native hide/reveal regression passed discovery, capture, own and
+  foreign restoration, repeated toggles, cancellation restoration, and removed/
+  renamed entry rejection. It separately recorded `liveIdentitiesRestored: true`
+  and `liveEntriesResolvable: false`: Macs Fan Control changed its live RPM
+  description. Activation still rejects that stale description. Dynamic refresh
+  and same-label replacement isolation remain unfinished.
+- Independent system-extra queries found four Space copies per visible extra,
+  only one of which matched the physical hit. Discovery now retains that exposed
+  copy without merging unknown collapsed identities. The query reduced 30 entries
+  to 18; system activation still lacks tested launch-date identity evidence.

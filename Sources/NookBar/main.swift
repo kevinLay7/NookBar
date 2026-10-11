@@ -96,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pointerEnteredPresentation = false
     private var pointerLeftPresentation: Date?
     private var spacingProbeItems: [NSStatusItem] = []
+    private var activatedProbe: Int?
     private var separatorLab: SeparatorLab?
     private lazy var arrangementWindow = ArrangementWindow()
     private var arrangingIcons = false
@@ -161,6 +162,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 probe.button?.image = NSImage(systemSymbolName: "\(index).circle", accessibilityDescription: "NookBar spacing probe S\(index)")
                 probe.button?.image?.isTemplate = true
                 probe.button?.setAccessibilityLabel("NookBar spacing probe S\(index)")
+                probe.button?.tag = index
+                probe.button?.target = self
+                probe.button?.action = #selector(probeClicked(_:))
                 spacingProbeItems.append(probe)
             }
         }
@@ -350,6 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func restore(message: String, clearIntent: Bool = true) {
+        HiddenBar.restoreOverflow()
         if clearIntent { visibilityRequested = false }
         nativeItemsRevealed = false
         presentationStarted = nil
@@ -467,6 +472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func dismissTemporaryMenu() -> Bool {
         guard let bundle = temporaryBundle else { return true }
         guard NBCancelMenu(bundle) else { setStatus("Close the open menu before opening another icon."); return false }
+        HiddenBar.restoreOverflow()
         menuWatch?.invalidate(); menuWatch = nil
         temporaryBundle = nil
         return true
@@ -717,9 +723,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard generation == operation else { return }
             try? await Task.sleep(for: .milliseconds(300))
             guard generation == operation else { return }
+            if let error { restore(message: error); return }
+            let opened = await HiddenBar.press(entry: entry, screen: screen)
+            guard generation == operation else { return }
             isPending = false
-            guard error == nil, NBPressMenuBarEntry(entry, HiddenBar.captureFrame(for: screen)) else {
-                restore(message: error ?? "This menu bar item changed or could not be opened. Apps have been restored; reopen the strip to refresh it.")
+            guard opened else {
+                restore(message: "This menu bar item changed or could not be opened. Apps have been restored; reopen the strip to refresh it.")
                 return
             }
             let started = Date()
@@ -730,6 +739,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     guard Date().timeIntervalSince(started) > 1, !NBMenuIsOpen(icon.bundle) else { return }
                     self.menuWatch?.invalidate(); self.menuWatch = nil
                     self.temporaryBundle = nil
+                    HiddenBar.restoreOverflow()
                     self.hideSelectedApps()
                 }
             }
@@ -753,6 +763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func hideSelectedApps(then completion: (() -> Void)? = nil) {
         guard !arrangingIcons, !isPending, !relaunchingMenuApps else { return }
+        HiddenBar.restoreOverflow()
         guard AXIsProcessTrusted() else { requestAccessibility(); return }
         let own = Bundle.main.bundleIdentifier ?? "com.codenest.nookbar"
         let targets = selected.intersection(currentBundles()).filter { $0 != own && !$0.hasPrefix("com.apple.") }
@@ -918,6 +929,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        HiddenBar.restoreOverflow()
         appearance.stop()
         arrangementWindow.cancel()
         separatorLab?.stop()
@@ -934,8 +946,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         visibility.restore()
     }
 
+    @objc private func probeClicked(_ sender: NSButton) { activatedProbe = sender.tag }
+
     private func runOverflowCheck() async {
-        // Read/capture only our disposable probe items; no foreign item actions.
+        // Test the native overflow control and our disposable icons only.
         try? await Task.sleep(for: .seconds(2))
         var report: [String: Any] = [:]
         if let screen = NSScreen.screens.first {
@@ -955,8 +969,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 let icons = try await HiddenBar.capture(entries: exposed)
                 report["visibleCaptureCount"] = icons.count
-                report["passed"] = !collapsed.isEmpty && rejected && exposed.count == 3 && icons.count == exposed.count
+                report["exposurePassed"] = entries.count == 24 && collapsed.count == 21 && rejected && exposed.count == 3 && icons.count == exposed.count
             } catch { report["visibleCaptureError"] = error.localizedDescription; report["passed"] = false }
+            let frame = HiddenBar.captureFrame(for: screen)
+            let initialOverflow = NBMenuBarOverflowState(frame)
+            report["initialOverflow"] = initialOverflow
+            if initialOverflow == 0 {
+                report["expandRequested"] = NBSetMenuBarOverflowExpanded(frame, true)
+                try? await Task.sleep(for: .milliseconds(500))
+                if CommandLine.arguments.contains("--overflow-hold") {
+                    try? await Task.sleep(for: .seconds(15))
+                }
+                let expanded = NBMenuBarEntries(frame).filter {
+                    $0.bundle == Bundle.main.bundleIdentifier && $0.label.hasPrefix("NookBar spacing probe")
+                }
+                report["expandedOverflow"] = NBMenuBarOverflowState(frame)
+                report["expandedCount"] = expanded.count
+                report["expandedExposed"] = expanded.filter { NBMenuBarEntryIsExposed($0) }.map(\.label)
+                do { report["expandedCaptureCount"] = try await HiddenBar.capture(entries: expanded).count }
+                catch { report["expandedCaptureError"] = error.localizedDescription }
+                do {
+                    report["preexpandedCaptureCount"] = try await HiddenBar.capture(entries: expanded, screen: screen).count
+                    report["preexpandedStatePreserved"] = NBMenuBarOverflowState(frame) == 1
+                } catch { report["preexpandedCaptureError"] = error.localizedDescription }
+                report["collapseRequested"] = NBSetMenuBarOverflowExpanded(frame, false)
+                try? await Task.sleep(for: .milliseconds(500))
+                report["restoredOverflow"] = NBMenuBarOverflowState(frame)
+            }
+            report["passed"] = (report["exposurePassed"] as? Bool == true) &&
+                (report["expandedOverflow"] as? Int == 1) && (report["expandedCaptureCount"] as? Int == 24) &&
+                (report["preexpandedCaptureCount"] as? Int == 24) && (report["preexpandedStatePreserved"] as? Bool == true) &&
+                (report["restoredOverflow"] as? Int == 0)
+            do {
+                let icons = try await HiddenBar.capture(entries: entries, screen: screen)
+                report["automaticCaptureCount"] = icons.count
+                report["automaticRestoredOverflow"] = NBMenuBarOverflowState(frame)
+                report["passed"] = (report["passed"] as? Bool == true) && icons.count == 24 && NBMenuBarOverflowState(frame) == 0
+                if let entry = icons.first(where: { $0.label == "NookBar spacing probe S24" })?.entry {
+                    report["activationRequested"] = await HiddenBar.press(entry: entry, screen: screen)
+                    try? await Task.sleep(for: .milliseconds(300))
+                    report["activationMatched"] = activatedProbe == 24
+                    HiddenBar.restoreOverflow()
+                    try? await Task.sleep(for: .milliseconds(500))
+                    report["activationRestoredOverflow"] = NBMenuBarOverflowState(frame)
+                    report["passed"] = (report["passed"] as? Bool == true) && activatedProbe == 24 && NBMenuBarOverflowState(frame) == 0
+                } else { report["passed"] = false }
+                if CommandLine.arguments.contains("--overflow-strip-preview"), let (anchor, _) = barAnchor() {
+                    hiddenBar.show(icons: icons, anchor: anchor, screen: screen, sectionTitle: "Overflow probe")
+                    try? await Task.sleep(for: .seconds(15))
+                }
+            } catch { report["automaticCaptureError"] = error.localizedDescription; report["passed"] = false }
         } else { report["passed"] = false }
         if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
            let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
@@ -976,8 +1038,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let originalEntries = identityScreen.map { NBMenuBarEntries($0).filter { !$0.bundle.hasPrefix("com.apple.") } } ?? []
         if let screen = NSScreen.screens.first {
             let entries = NBMenuBarEntries(HiddenBar.captureFrame(for: screen))
-            let keys = entries.map { "\($0.bundle):\($0.frame)" }
-            let discovered = entries.filter { $0.bundle == own }.count == 1 && Set(keys).count == keys.count
+            let unique = entries.enumerated().allSatisfy { index, entry in
+                !entries.prefix(index).contains { NBSameMenuBarEntry($0, entry) && $0.frame == entry.frame }
+            }
+            let discovered = entries.filter { $0.bundle == own }.count == 1 && unique
             report["entryDiscovery"] = discovered
             if CGPreflightScreenCaptureAccess() {
                 do {
@@ -1003,9 +1067,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let after = snapshot()
             report["after"] = after.counts
             if let frame = identityScreen {
+                let current = NBMenuBarEntries(frame)
                 report["liveIdentitiesRestored"] = !originalEntries.isEmpty && originalEntries.allSatisfy {
-                    NBResolveMenuBarEntry($0, frame) != nil
+                    original in current.filter { NBSameMenuBarEntry($0, original) }.count == 1
                 }
+                report["liveEntriesResolvable"] = originalEntries.allSatisfy { NBResolveMenuBarEntry($0, frame) != nil }
+                report["descriptionChangedBundles"] = originalEntries.filter { original in
+                    current.contains { NBSameMenuBarEntry($0, original) && $0.label != original.label }
+                }.map(\.bundle)
             }
             let hidden = during.error == nil && during.counts[own] == nil && !during.counts.isEmpty
             let restored = after.error == nil && after.counts[own] == before.counts[own]

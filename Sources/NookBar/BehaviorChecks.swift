@@ -64,6 +64,7 @@ enum BehaviorChecks {
         let unavailableEntry = NBMenuBarEntry()
         check(!NBSameMenuBarEntry(unavailableEntry, unavailableEntry), "an entry without live AX identity cannot match itself")
         check(!NBMenuBarEntryIsExposed(unavailableEntry), "an entry without live AX identity cannot supply icon pixels")
+        check(NBMenuBarOverflowState(CGRect.null) == -1 && !NBSetMenuBarOverflowExpanded(CGRect.null, true), "an invalid display cannot select or click an overflow control")
         check(NBResolveMenuBarEntry(unavailableEntry, CGRect(x: 0, y: 0, width: 100, height: 39)) == nil, "a missing identity never resolves by ordinal or label")
         check(ArrangementWindow.instancesRespond(to: NSSelectorFromString("tableView:pasteboardWriterForRow:")) && ArrangementWindow.instancesRespond(to: NSSelectorFromString("tableView:acceptDrop:row:dropOperation:")), "native table exposes its drag source and drop handlers")
         let source = CGRect(x: 100, y: 5, width: 24, height: 24)

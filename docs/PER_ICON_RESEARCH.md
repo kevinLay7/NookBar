@@ -264,3 +264,64 @@ string and `0x10032f138` match the selected `arm64e.x1` slice, not `arm64e`.
 Binding evidence:
 `ev_da218dc275dffb4882cfc61fcbc17f4fae66f1989ebbb1984c3c24c12cad530e`,
 `ev_84167acf7abc24c525e1f68aaccccfdf2af3669c0290a190f7829511ce0a9b31`.
+
+### Automatic expansion, inventory, and activation follow-up
+
+The exposed overflow button advertises an empty AX action list. A background
+CUA press changed one inactive Accessibility copy to `Hide Menu Bar Items`,
+while the on-screen center hit still returned `Show Hidden Menu Bar Items` and
+the physical image remained collapsed. The native implementation now reads the
+localized show/hide labels from MenuBarAgent's `MenuBarCore` bundle table and
+selects the control using its actual system-wide hit identity and owning PID.
+It posts a bounded left down/up pair only with existing event-posting access
+and no held mouse buttons, then restores the pointer position. Delivery does
+not prove expansion; callers poll the live state and item exposure.
+
+Physical expansion exposed S24 through S4 to the left of the notch. Independent
+hit tests then returned each original NookBar item identity at its actual frame;
+S24 was at `(187, 7.5, 33.5, 24)`. Some MenuBarAgent group copies retained the
+collapsed region. Discovery now keeps separate AX identities at shared frames
+and accepts exposed `AXMenuExtra` items outside stale group regions only after
+a matching live hit test. It no longer drops 20 of the 21 collapsed probe icons.
+
+The normal capture path owns a temporary overflow lease only if it opens a
+collapsed bar. It waits up to two seconds for every requested identity to be
+exposed, captures with the existing before/after checks, and verifies collapse
+before returning images. An already-expanded bar is preserved. Cancellation,
+capture failure, Show All, hiding, and app termination request restoration of
+NookBar's lease. Icon activation can acquire the same lease, expose the retained
+identity, and press it; the existing menu-close watcher restores it before
+rehiding. Overlapping captures cannot take the same lease.
+
+The signed installed app's expanded diagnostic now verifies all 24 identities,
+24 captured images, automatic capture/restoration, already-expanded state
+preservation, and activation of S24's actual native button action. An optional
+`--overflow-strip-preview` displays those captured images for 15 seconds. A
+physical screenshot showed the complete numbered 24-to-1 strip below a collapsed
+menu bar. These checks cover owned icons on the built-in display. Foreign
+overflow menus/popovers, system extras, other displays/Spaces, interruption,
+permission loss, and same-label replacement isolation remain unverified.
+
+### Discovery and changing-description regression checks
+
+A broad hide/reveal regression exposed four separate AX identities for each
+MenuBarAgent-hosted system extra at an identical visible frame. Independent
+queries found exactly one exposed identity for each of Focus, Battery, Control
+Center, and Clock; the other three copies failed the center hit test. Discovery
+now discards those inactive copies only when an exposed copy proves the current
+pixels at the same frame and label. Unknown collapsed identities remain in the
+inventory. A read-only query reduced 30 entries to 18, retaining the exposed
+system extras and the distinct third-party items. Some system agents have no
+launch date: same-query deduplication uses raw AX identity, while later activation
+still requires the original launch-date evidence. System activation remains pending.
+
+The same regression found Macs Fan Control's description changing with live RPM.
+Its AX/process identity survived hiding and restoration, but exact-description
+resolution rejected the older capture. The diagnostic now reports identity
+restoration separately from `liveEntriesResolvable` and
+`descriptionChangedBundles`; the latter named Macs Fan Control in this run.
+It no longer assumes that frames are unique. The signed app's hide/reveal,
+discovery, capture, foreign hiding/restoration, and removal/rename checks passed;
+`liveEntriesResolvable` remained false and same-label replacement isolation
+remained unproven. Dynamic descriptions still require refreshed captures; this
+follow-up does not relax the activation guard or claim dynamic refresh is solved.

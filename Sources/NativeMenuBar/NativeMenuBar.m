@@ -35,7 +35,7 @@ static CGRect ElementFrame(AXUIElementRef element) {
 }
 
 static void CollectEntries(AXUIElementRef element, CGRect screen, CGRect region, NSUInteger depth,
-                           NSMutableDictionary *entries, NSUInteger *budget) {
+                           NSMutableArray *entries, NSUInteger *budget) {
     if (depth > 6 || !*budget) return;
     (*budget)--;
     if ([Attribute(element, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXMenuBarItemRole]) {
@@ -44,8 +44,7 @@ static void CollectEntries(AXUIElementRef element, CGRect screen, CGRect region,
         NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
         CGPoint center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
         if (app.bundleIdentifier && frame.size.width > 0 && frame.size.height > 0 &&
-            CGRectContainsRect(screen, frame) && CGRectContainsPoint(region, center)) {
-            NSString *key = [NSString stringWithFormat:@"%@:%@", app.bundleIdentifier, NSStringFromRect(frame)];
+            CGRectContainsRect(screen, frame)) {
             NBMenuBarEntry *entry = [NBMenuBarEntry new];
             entry.bundle = app.bundleIdentifier; entry.frame = frame; entry.element = (__bridge id)element;
             entry.owner = app; entry.launchDate = app.launchDate;
@@ -53,7 +52,22 @@ static void CollectEntries(AXUIElementRef element, CGRect screen, CGRect region,
             if (!title.length) title = Attribute(element, kAXTitleAttribute);
             if (!title.length) title = Attribute(element, kAXHelpAttribute);
             entry.label = title.length ? title : (app.localizedName ?: entry.bundle);
-            entries[key] = entry;
+            // Several collapsed icons can share one positive frame. Deduplicate
+            // replicated AX trees by identity instead of dropping those icons.
+            for (NBMenuBarEntry *existing in entries) {
+                // Deduplication within this query does not require launch-date
+                // evidence; some system agents do not supply it. Resolution
+                // across queries still requires that evidence in NBSameMenuBarEntry.
+                if (existing.owner.processIdentifier == entry.owner.processIdentifier &&
+                    CFEqual((__bridge CFTypeRef)existing.element, (__bridge CFTypeRef)entry.element) &&
+                    CGRectEqualToRect(existing.frame, frame)) return;
+            }
+            // Expansion updates the owning app's status-item frames before all
+            // MenuBarAgent group copies update. Accept those exposed extras by
+            // live hit identity, without admitting the app's ordinary menus.
+            if (!CGRectContainsPoint(region, center) &&
+                (![Attribute(element, kAXSubroleAttribute) isEqual:@"AXMenuExtra"] || !NBMenuBarEntryIsExposed(entry))) return;
+            [entries addObject:entry];
         }
         return;
     }
@@ -68,7 +82,7 @@ NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame) {
     if (!agent) return @[];
     AXUIElementRef root = AXUIElementCreateApplication(agent.processIdentifier);
     AXUIElementSetMessagingTimeout(root, 0.15);
-    NSMutableDictionary *entries = [NSMutableDictionary dictionary]; NSUInteger budget = 4096;
+    NSMutableArray *entries = [NSMutableArray array]; NSUInteger budget = 4096;
     id windows = Attribute(root, kAXChildrenAttribute);
     if ([windows isKindOfClass:NSArray.class]) for (id window in windows) {
         AXUIElementRef win = (__bridge AXUIElementRef)window;
@@ -81,7 +95,21 @@ NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame) {
     }
     CFRelease(root);
     if (!budget) return @[];
-    return [entries.allValues sortedArrayUsingComparator:^NSComparisonResult(NBMenuBarEntry *a, NBMenuBarEntry *b) {
+    // SwiftUI system extras have separate AX identities in inactive Space copies.
+    // An exposed copy identifies the actual pixels at this frame; retain unknown
+    // collapsed identities when no exposed copy proves which one is current.
+    NSArray *exposedSystem = [entries filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NBMenuBarEntry *entry, NSDictionary *bindings) {
+        return [entry.bundle isEqual:@"com.apple.MenuBarAgent"] && NBMenuBarEntryIsExposed(entry);
+    }]];
+    NSArray *normalized = [entries filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NBMenuBarEntry *entry, NSDictionary *bindings) {
+        if (![entry.bundle isEqual:@"com.apple.MenuBarAgent"]) return YES;
+        for (NBMenuBarEntry *exposed in exposedSystem) {
+            if (CGRectEqualToRect(entry.frame, exposed.frame) && [entry.label isEqual:exposed.label] &&
+                !CFEqual((__bridge CFTypeRef)entry.element, (__bridge CFTypeRef)exposed.element)) return NO;
+        }
+        return YES;
+    }]];
+    return [normalized sortedArrayUsingComparator:^NSComparisonResult(NBMenuBarEntry *a, NBMenuBarEntry *b) {
         if (a.frame.origin.x < b.frame.origin.x) return NSOrderedAscending;
         if (a.frame.origin.x > b.frame.origin.x) return NSOrderedDescending;
         return [a.bundle compare:b.bundle];
@@ -121,6 +149,83 @@ BOOL NBMenuBarEntryIsExposed(NBMenuBarEntry *entry) {
     // Collapsed overflow items retain positive AX frames over the native overflow
     // button. Their geometry alone does not identify the pixels being sampled.
     return NBMenuBarEntryMatchesPoint(entry, CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame)));
+}
+
+static AXUIElementRef CopyOverflowControl(CGRect screenFrame, NSInteger *state) {
+    *state = -1;
+    if (!AXIsProcessTrusted()) return NULL;
+    NSRunningApplication *agent = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.MenuBarAgent"].firstObject;
+    if (!agent) return NULL;
+    NSBundle *bundle = [NSBundle bundleWithURL:agent.bundleURL];
+    NSString *show = [bundle localizedStringForKey:@"menuBar.showOverflowItemsAccessibilityLabel" value:nil table:@"MenuBarCore"];
+    NSString *hide = [bundle localizedStringForKey:@"menuBar.hideOverflowItemsAccessibilityLabel" value:nil table:@"MenuBarCore"];
+    AXUIElementRef root = AXUIElementCreateApplication(agent.processIdentifier);
+    AXUIElementSetMessagingTimeout(root, 0.15);
+    AXUIElementRef system = AXUIElementCreateSystemWide(), found = NULL;
+    id windows = Attribute(root, kAXChildrenAttribute);
+    if ([windows isKindOfClass:NSArray.class]) for (id window in windows) {
+        AXUIElementRef win = (__bridge AXUIElementRef)window;
+        if (![Attribute(win, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXWindowRole]) continue;
+        id children = Attribute(win, kAXChildrenAttribute);
+        if (![children isKindOfClass:NSArray.class]) continue;
+        for (id child in children) {
+            AXUIElementRef candidate = (__bridge AXUIElementRef)child;
+            NSString *label = Attribute(candidate, kAXDescriptionAttribute);
+            if (![Attribute(candidate, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXButtonRole] ||
+                (![label isEqual:show] && ![label isEqual:hide])) continue;
+            CGRect frame = ElementFrame(candidate);
+            if (CGRectIsEmpty(frame) || !CGRectContainsRect(screenFrame, frame)) continue;
+            AXUIElementRef hit = NULL;
+            if (AXUIElementCopyElementAtPosition(system, CGRectGetMidX(frame), CGRectGetMidY(frame), &hit) != kAXErrorSuccess || !hit) continue;
+            pid_t pid = 0; AXUIElementGetPid(hit, &pid);
+            NSString *actual = Attribute(hit, kAXDescriptionAttribute);
+            if (pid == agent.processIdentifier && [Attribute(hit, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXButtonRole] &&
+                ([actual isEqual:show] || [actual isEqual:hide])) {
+                *state = [actual isEqual:hide] ? 1 : 0;
+                found = hit; break;
+            }
+            CFRelease(hit);
+        }
+        if (found) break;
+    }
+    CFRelease(system); CFRelease(root);
+    return found;
+}
+
+NSInteger NBMenuBarOverflowState(CGRect screenFrame) {
+    NSInteger state; AXUIElementRef control = CopyOverflowControl(screenFrame, &state);
+    if (control) CFRelease(control);
+    return state;
+}
+
+BOOL NBSetMenuBarOverflowExpanded(CGRect screenFrame, BOOL expanded) {
+    NSInteger state; AXUIElementRef control = CopyOverflowControl(screenFrame, &state);
+    if (!control) return NO;
+    BOOL success = state == (expanded ? 1 : 0);
+    if (!success && CGPreflightPostEventAccess() &&
+        !CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft) &&
+        !CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonRight) &&
+        !CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonCenter)) {
+        // The exposed native overflow button advertises no AXPress action on
+        // macOS 27. Click only this hit-tested control, never an inactive AX copy.
+        CGRect frame = ElementFrame(control);
+        CGPoint point = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
+        CGEventRef cursor = CGEventCreate(NULL);
+        CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
+        CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
+        if (cursor && down && up) {
+            CGEventSetFlags(down, 0); CGEventSetFlags(up, 0);
+            CGEventPost(kCGHIDEventTap, down); CGEventPost(kCGHIDEventTap, up);
+            CGEventRef restore = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, CGEventGetLocation(cursor), kCGMouseButtonLeft);
+            if (restore) { CGEventSetFlags(restore, CGEventGetFlags(cursor)); CGEventPost(kCGHIDEventTap, restore); CFRelease(restore); }
+            success = YES; // Delivery only; the caller must verify the new state.
+        }
+        if (cursor) CFRelease(cursor);
+        if (down) CFRelease(down);
+        if (up) CFRelease(up);
+    }
+    CFRelease(control);
+    return success;
 }
 
 NBMenuBarEntry *NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame) {
@@ -259,7 +364,7 @@ CGRect NBEmptyStatusSlot(CGRect screenFrame, CGRect expectedFrame) {
             AXUIElementRef element = (__bridge AXUIElementRef)group;
             CGRect rect = ElementFrame(element);
             if (rect.size.width < 20 || rect.size.width > 50 || !CGRectContainsRect(screenFrame, rect)) continue;
-            NSMutableDictionary *items = [NSMutableDictionary dictionary]; NSUInteger budget = 256;
+            NSMutableArray *items = [NSMutableArray array]; NSUInteger budget = 256;
             CollectEntries(element, screenFrame, rect, 0, items, &budget);
             if (!budget || items.count) continue;
             CGFloat delta = fabs(CGRectGetMidX(rect) - CGRectGetMidX(expectedFrame));

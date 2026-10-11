@@ -13,7 +13,7 @@ prove the installed Ice build works on this macOS version.
 | Capability | Current implementation | Evidence still required |
 | --- | --- | --- |
 | Hide/reveal selected items | App-wide native backend | Independent control of multiple icons from one app, system icons, per-display verification |
-| Hidden icon strip | Actual captured icons, separate buttons; live exposure checks reject native overflow-control pixels | Automatic native overflow expansion and complete collapsed-item inventory; refresh of changing icons; same-label replacement identity reuse; clipped/notch items; all click variants; menus and custom popovers |
+| Hidden icon strip | Actual captured icons, separate buttons; live exposure checks; distinct collapsed identities; automatic native overflow capture/restoration and activation verified with 24 owned test icons | Foreign overflow items and their menus/popovers; system extras; other displays; refresh of changing icons; same-label replacement identity reuse; clipped/notch items; all click variants |
 | Native menu bar reveal instead of strip | Both sections' reveal/toggle behavior verified through app controls and independent AX snapshots | Physical tray click and each automatic rehide strategy |
 | Control icon | Native tray plus N fallback | All displays, fullscreen, automatic menu bar hiding, custom/show/hide icon options |
 | Empty-space click and secondary context menu | Global and local event handling | Physical toggle and context-menu checks, modifier combinations |
