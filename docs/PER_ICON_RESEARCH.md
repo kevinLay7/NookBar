@@ -1,5 +1,20 @@
 # Per-icon backend investigation
 
+## Persistent membership foundation
+
+`AppSections` now stores per-icon section overrides in `IconSections`, including
+explicit Visible overrides of an app's Hidden assignment. Removing an override
+restores the app fallback; clearing assignments clears overrides as well. The
+native bridge supplies a JSON tuple key of bundle, primary descriptor kind, and
+primary descriptor value, rejecting empty descriptors. This avoids ordinal and
+delimiter-based keys but does not prove stable lifetime, unique membership, or
+stability of changing labels. Future application of these assignments must
+require a unique live match; no movement/capture identity guards are relaxed.
+Behavior checks verify same-app icons keeping different sections across a
+storage reload and removal restoring the app fallback. Normal UI and hiding
+still use app assignments; the per-icon picker and divider integration remain
+unfinished. No real user assignments were migrated or changed.
+
 ## Foreign same-app divider follow-up (October 11)
 
 A subsequent diagnostic adds a second disposable item, V, moves it to the

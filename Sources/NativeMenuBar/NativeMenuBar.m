@@ -209,6 +209,12 @@ BOOL NBSameMenuBarEntryDescriptor(NBMenuBarEntry *first, NBMenuBarEntry *second)
         [first.descriptor isEqual:second.descriptor];
 }
 
+NSString *NBMenuBarEntryPreferenceKey(NBMenuBarEntry *entry) {
+    if (!entry.bundle.length || !entry.descriptor.length || [entry.descriptorKind isEqual:@"none"]) return nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@[entry.bundle, entry.descriptorKind, entry.descriptor] options:0 error:nil];
+    return data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
+}
+
 static AXUIElementRef CopyOverflowControl(CGRect screenFrame, NSInteger *state) {
     *state = -1;
     if (!AXIsProcessTrusted()) return NULL;

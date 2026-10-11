@@ -19,6 +19,8 @@ BOOL NBSetMenuBarOverflowExpanded(CGRect screenFrame, BOOL expanded);
 BOOL NBIsOwnMenuBarEvent(CGEventRef _Nullable event);
 BOOL NBSameMenuBarEntry(NBMenuBarEntry *first, NBMenuBarEntry *second);
 BOOL NBSameMenuBarEntryDescriptor(NBMenuBarEntry *first, NBMenuBarEntry *second);
+// A descriptor-based preference key, not a lifetime or uniqueness guarantee.
+NSString * _Nullable NBMenuBarEntryPreferenceKey(NBMenuBarEntry *entry);
 NBMenuBarEntry * _Nullable NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame);
 // Returns native click delivery; interface/action confirmation is separate.
 BOOL NBPressMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame);
