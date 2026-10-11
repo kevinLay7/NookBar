@@ -200,6 +200,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Task { await self.runWidthCheck() }
             return
         }
+        if CommandLine.arguments.contains("--foreign-divider-check") {
+            Task { await self.runForeignDividerCheck() }
+            return
+        }
         if CommandLine.arguments.contains("--separator-lab") {
             let lab = SeparatorLab(); separatorLab = lab; lab.show()
             return
@@ -1121,6 +1125,132 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             } catch { report["automaticCaptureError"] = error.localizedDescription; report["passed"] = false }
         } else { report["passed"] = false }
+        if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
+           let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), options: .atomic)
+        }
+        NSApp.terminate(nil)
+    }
+
+    // Only our disposable divider moves. No foreign position or saved section is written.
+    private func runForeignDividerCheck() async {
+        var report: [String: Any] = [:]
+        func captureStage(_ name: String, frame: CGRect) async throws {
+            guard let index = CommandLine.arguments.firstIndex(of: "--divider-capture-dir"), CommandLine.arguments.indices.contains(index + 1) else { return }
+            let folder = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let image = try await SCScreenshotManager.captureImage(in: CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: 40))
+            let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+            try data?.write(to: folder.appendingPathComponent("\(name).png"))
+        }
+        let divider = NSStatusBar.system.statusItem(withLength: 24)
+        divider.button?.title = "D"
+        divider.button?.setAccessibilityLabel("NookBar foreign divider probe")
+        var removed = false
+        defer { if !removed { NSStatusBar.system.removeStatusItem(divider) } }
+        if let screen = NSScreen.screens.first {
+            let frame = HiddenBar.captureFrame(for: screen)
+            let initialOverflow = NBMenuBarOverflowState(frame)
+            report["initialOverflow"] = initialOverflow
+            var original: [NBMenuBarEntry] = []
+            var systemObservations: [NBMenuBarEntry] = []
+            do {
+                try await Task.sleep(for: .seconds(2))
+                let entries = NBMenuBarEntries(frame)
+                let exposedForeign = entries.filter { NBMenuBarEntryIsExposed($0) && $0.bundle != Bundle.main.bundleIdentifier }
+                original = exposedForeign.filter { NBSameMenuBarEntry($0, $0) }
+                systemObservations = exposedForeign.filter { !NBSameMenuBarEntry($0, $0) }
+                guard let source = entries.first(where: { $0.label == "NookBar foreign divider probe" }) else { throw MenuBarMovement.Failure.changed }
+                let bundle = "eu.exelban.Stats"
+                let pairs = zip(original, original.dropFirst()).filter { $0.bundle == bundle && $1.bundle == bundle }
+                guard let pair = pairs.first else { throw MenuBarMovement.Failure.geometry }
+                let left = pair.0, right = pair.1
+                report["bundle"] = bundle; report["leftLabel"] = left.label; report["rightLabel"] = right.label
+                report["eventPostingAllowed"] = CGPreflightPostEventAccess()
+                report["heldMouseButtons"] = [CGMouseButton.left, .right].filter { CGEventSource.buttonState(.combinedSessionState, button: $0) }.map { $0.rawValue }
+                report["heldModifierKeys"] = [56, 58, 59, 60, 61, 62].filter { CGEventSource.keyState(.combinedSessionState, key: CGKeyCode($0)) }
+                try await MenuBarMovement().move(source, beside: right, before: true, screen: screen)
+                let arranged = NBMenuBarEntries(frame)
+                guard let liveRight = NBResolveMenuBarEntry(right, frame) else { throw MenuBarMovement.Failure.changed }
+                let protected = arranged.filter { $0.bundle != Bundle.main.bundleIdentifier && $0.frame.minX >= liveRight.frame.minX && NBMenuBarEntryIsExposed($0) }
+                try await captureStage("arranged", frame: frame)
+                var stages: [[String: Any]] = []
+                var chosenWidth: Int?
+                for width in stride(from: 24, through: 600, by: 24) {
+                    divider.length = CGFloat(width)
+                    try await Task.sleep(for: .milliseconds(500))
+                    let leftLive = NBResolveMenuBarEntry(left, frame), rightLive = NBResolveMenuBarEntry(right, frame)
+                    let leftExposed = leftLive.map { NBMenuBarEntryIsExposed($0) } ?? false
+                    let rightExposed = rightLive.map { NBMenuBarEntryIsExposed($0) } ?? false
+                    let currentEntries = NBMenuBarEntries(frame)
+                    let protectedFailures = protected.filter { entry in
+                        if NBSameMenuBarEntry(entry, entry) {
+                            return !(NBResolveMenuBarEntry(entry, frame).map { NBMenuBarEntryIsExposed($0) } ?? false)
+                        }
+                        // Read-only pixel-location observation for system extras without launch dates;
+                        // this is not used to authorize movement, capture, or persistent membership.
+                        let point = CGPoint(x: entry.frame.midX, y: entry.frame.midY)
+                        let matches = currentEntries.filter { $0.bundle == entry.bundle && $0.label == entry.label && NBMenuBarEntryMatchesPoint($0, point) && NBMenuBarEntryIsExposed($0) }
+                        return matches.isEmpty
+                    }
+                    let protectedForeignExposed = !protectedFailures.contains { NBSameMenuBarEntry($0, $0) }
+                    let protectedExposed = protectedFailures.isEmpty
+                    let overflow = NBMenuBarOverflowState(frame)
+                    stages.append(["width": width, "leftResolvable": leftLive != nil, "leftExposed": leftExposed,
+                                   "rightExposed": rightExposed, "protectedRightExposed": protectedExposed,
+                                   "protectedForeignRightExposed": protectedForeignExposed,
+                                   "protectedFailures": protectedFailures.map(\.label), "overflow": overflow])
+                    if leftLive != nil, !leftExposed, rightExposed, protectedForeignExposed, overflow == 0 {
+                        chosenWidth = width; break
+                    }
+                    if !protectedForeignExposed || (!leftExposed && overflow == -1) { break }
+                }
+                report["stages"] = stages
+                report["independentForeignHideObserved"] = chosenWidth != nil
+                if let chosenWidth {
+                    report["chosenWidth"] = chosenWidth
+                    try await captureStage("hidden", frame: frame)
+                    report["hiddenForeignCaptureCount"] = try await HiddenBar.capture(entries: [left], screen: screen).count
+                    report["captureRestoredCollapsed"] = NBMenuBarOverflowState(frame) == 0
+                }
+            } catch { report["error"] = error.localizedDescription }
+            divider.length = 24
+            HiddenBar.restoreOverflow()
+            NSStatusBar.system.removeStatusItem(divider); removed = true
+            try? await Task.sleep(for: .seconds(2))
+            if initialOverflow == 0 && NBMenuBarOverflowState(frame) == 1 { _ = NBSetMenuBarOverflowExpanded(frame, false) }
+            if initialOverflow == 1 && NBMenuBarOverflowState(frame) == 0 { _ = NBSetMenuBarOverflowExpanded(frame, true) }
+            let restored = NBMenuBarEntries(frame)
+            do { try await captureStage("restored", frame: frame) }
+            catch { report["restorationCaptureError"] = error.localizedDescription }
+            let positions = original.map { entry in restored.indices.filter { NBSameMenuBarEntry(restored[$0], entry) } }
+            report["foreignOrderRestored"] = !original.isEmpty && positions.allSatisfy { $0.count == 1 }
+                && zip(positions, positions.dropFirst()).allSatisfy { $0[0] < $1[0] }
+            report["foreignExposureRestored"] = !original.isEmpty && original.allSatisfy { entry in
+                let matches = restored.filter { NBSameMenuBarEntry($0, entry) }
+                return matches.count == 1 && NBMenuBarEntryIsExposed(matches[0])
+            }
+            report["foreignDescriptorsResolvable"] = original.allSatisfy { NBResolveMenuBarEntry($0, frame) != nil }
+            report["changedDescriptorLabels"] = original.filter { NBResolveMenuBarEntry($0, frame) == nil }.map(\.label)
+            report["unexposedRestoredLabels"] = original.filter { entry in
+                let matches = restored.filter { NBSameMenuBarEntry($0, entry) }
+                return matches.count != 1 || !NBMenuBarEntryIsExposed(matches[0])
+            }.map(\.label)
+            report["systemRegionsRestored"] = systemObservations.allSatisfy { entry in
+                let point = CGPoint(x: entry.frame.midX, y: entry.frame.midY)
+                return restored.contains { $0.bundle == entry.bundle && $0.label == entry.label && NBMenuBarEntryMatchesPoint($0, point) && NBMenuBarEntryIsExposed($0) }
+            }
+            report["systemObservationFrames"] = systemObservations.map { entry in
+                ["label": entry.label, "beforeX": entry.frame.minX, "beforeWidth": entry.frame.width,
+                 "after": restored.filter { $0.bundle == entry.bundle && $0.label == entry.label && NBMenuBarEntryIsExposed($0) }.map { ["x": $0.frame.minX, "width": $0.frame.width] }] as [String: Any]
+            }
+            report["finalOverflow"] = NBMenuBarOverflowState(frame)
+            report["foreignPairCheckPassed"] = report["independentForeignHideObserved"] as? Bool == true
+                && report["hiddenForeignCaptureCount"] as? Int == 1 && report["captureRestoredCollapsed"] as? Bool == true
+                && report["foreignOrderRestored"] as? Bool == true && report["foreignExposureRestored"] as? Bool == true
+                && NBMenuBarOverflowState(frame) == initialOverflow
+            report["passed"] = report["foreignPairCheckPassed"] as? Bool == true && report["systemRegionsRestored"] as? Bool == true
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
            let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), options: .atomic)

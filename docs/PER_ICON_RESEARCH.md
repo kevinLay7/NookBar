@@ -1,5 +1,56 @@
 # Per-icon backend investigation
 
+## Foreign same-app divider follow-up (October 11)
+
+The developer-only `--foreign-divider-check --report PATH` creates one disposable
+NookBar divider and moves only that divider between adjacent exposed Stats
+icons. No foreign icon is dragged and no section assignment, saved divider
+position, or user preference is written. Optional `--divider-capture-dir PATH`
+saves menu-region images before expansion, while hidden, and after removal.
+
+On this built-in display the chosen pair was Stats' Disk and CPU icons. The
+probe increases divider width in 24-point steps, bounded at 600 points. At 432
+points it observed Disk unexposed and CPU exposed, with every protected foreign
+icon to the right still exposed and the native overflow control collapsed.
+The physical image shows Disk and the leading icons absent while CPU, RAM,
+and the system extras to the right remain visible. Native overflow expansion
+captured one actual Disk image and restored collapsed overflow. Removing the
+divider restored the original foreign AX/process identities in their original
+order and exposure, with initial/final overflow both -1 (no exposed overflow
+control). The restored physical image shows the original icons again. The
+before/after preference domains were identical.
+
+The final report returned `independentForeignHideObserved`,
+`captureRestoredCollapsed`, `foreignOrderRestored`, `foreignExposureRestored`,
+`systemRegionsRestored`, `foreignPairCheckPassed`, and `passed` true;
+`hiddenForeignCaptureCount` was 1. This is the first verified independent hiding
+of two icons from a foreign app through a divider on this host. It does not
+establish public per-icon membership or a production backend.
+
+Restoration checks AX/process identity and exposure separately from primary
+descriptor resolution: an original temperature label changed from `69°C`, so
+`foreignDescriptorsResolvable` was false and `changedDescriptorLabels` recorded
+that entry. Capture/activation descriptor guards were not relaxed. Same-label
+replacement lifetime isolation remains unproven.
+
+The Clock intermittently failed AX exposure observations even while visible in
+the menu-region images. The diagnostic records all protected-item failures,
+but only a foreign item with a validated process identity stops the bounded
+width scan. System extras lacking launch dates are checked as read-only labeled
+regions using live center hit tests, independently of the foreign pair check;
+the broader `passed` flag also requires their final region restoration. These
+region observations do not authorize system-item capture/movement or establish
+stable system identity. The final chosen-width observation had no protected
+failures, but uninterrupted preservation across every intermediate width is
+not established by this run.
+
+Application menus changed during testing. A 432-point result is not a universal
+constant or a verified width-selection policy. Remaining work includes adapting
+to changing menu widths and notch/display constraints, preserving NookBar's
+control on the visible side, persistent per-icon sections, selective reveal,
+interruption/recovery, and verification across system items, displays, Spaces,
+and lifecycle events. The public app still uses app-wide hiding.
+
 ## Moderate-width follow-up (October 11)
 
 The earlier 10,000-point experiment does not rule out a divider at ordinary
