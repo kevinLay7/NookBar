@@ -1146,8 +1146,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let divider = NSStatusBar.system.statusItem(withLength: 24)
         divider.button?.title = "D"
         divider.button?.setAccessibilityLabel("NookBar foreign divider probe")
+        let visibleControl = NSStatusBar.system.statusItem(withLength: 24)
+        visibleControl.button?.title = "V"
+        visibleControl.button?.setAccessibilityLabel("NookBar visible control probe")
         var removed = false
-        defer { if !removed { NSStatusBar.system.removeStatusItem(divider) } }
+        defer { if !removed { NSStatusBar.system.removeStatusItem(divider); NSStatusBar.system.removeStatusItem(visibleControl) } }
         if let screen = NSScreen.screens.first {
             let frame = HiddenBar.captureFrame(for: screen)
             let initialOverflow = NBMenuBarOverflowState(frame)
@@ -1165,6 +1168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let pairs = zip(original, original.dropFirst()).filter { $0.bundle == bundle && $1.bundle == bundle }
                 guard let pair = pairs.first else { throw MenuBarMovement.Failure.geometry }
                 let left = pair.0, right = pair.1
+                guard let controlEntry = entries.first(where: { $0.label == "NookBar visible control probe" }) else { throw MenuBarMovement.Failure.changed }
+                try await MenuBarMovement().move(controlEntry, beside: right, before: false, screen: screen)
                 report["bundle"] = bundle; report["leftLabel"] = left.label; report["rightLabel"] = right.label
                 report["eventPostingAllowed"] = CGPreflightPostEventAccess()
                 report["heldMouseButtons"] = [CGMouseButton.left, .right].filter { CGEventSource.buttonState(.combinedSessionState, button: $0) }.map { $0.rawValue }
@@ -1182,6 +1187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let leftLive = NBResolveMenuBarEntry(left, frame), rightLive = NBResolveMenuBarEntry(right, frame)
                     let leftExposed = leftLive.map { NBMenuBarEntryIsExposed($0) } ?? false
                     let rightExposed = rightLive.map { NBMenuBarEntryIsExposed($0) } ?? false
+                    let controlExposed = NBResolveMenuBarEntry(controlEntry, frame).map { NBMenuBarEntryIsExposed($0) } ?? false
                     let currentEntries = NBMenuBarEntries(frame)
                     let protectedFailures = protected.filter { entry in
                         if NBSameMenuBarEntry(entry, entry) {
@@ -1198,12 +1204,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let overflow = NBMenuBarOverflowState(frame)
                     stages.append(["width": width, "leftResolvable": leftLive != nil, "leftExposed": leftExposed,
                                    "rightExposed": rightExposed, "protectedRightExposed": protectedExposed,
+                                   "visibleControlExposed": controlExposed,
                                    "protectedForeignRightExposed": protectedForeignExposed,
                                    "protectedFailures": protectedFailures.map(\.label), "overflow": overflow])
-                    if leftLive != nil, !leftExposed, rightExposed, protectedForeignExposed, overflow == 0 {
+                    if leftLive != nil, !leftExposed, rightExposed, controlExposed, protectedForeignExposed, overflow == 0 {
+                        report["visibleControlPreserved"] = true
                         chosenWidth = width; break
                     }
-                    if !protectedForeignExposed || (!leftExposed && overflow == -1) { break }
+                    if !controlExposed || !protectedForeignExposed || (!leftExposed && overflow == -1) { break }
                 }
                 report["stages"] = stages
                 report["independentForeignHideObserved"] = chosenWidth != nil
@@ -1216,7 +1224,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } catch { report["error"] = error.localizedDescription }
             divider.length = 24
             HiddenBar.restoreOverflow()
-            NSStatusBar.system.removeStatusItem(divider); removed = true
+            NSStatusBar.system.removeStatusItem(divider)
+            NSStatusBar.system.removeStatusItem(visibleControl); removed = true
             try? await Task.sleep(for: .seconds(2))
             if initialOverflow == 0 && NBMenuBarOverflowState(frame) == 1 { _ = NBSetMenuBarOverflowExpanded(frame, false) }
             if initialOverflow == 1 && NBMenuBarOverflowState(frame) == 0 { _ = NBSetMenuBarOverflowExpanded(frame, true) }

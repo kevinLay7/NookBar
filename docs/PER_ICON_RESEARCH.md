@@ -2,6 +2,15 @@
 
 ## Foreign same-app divider follow-up (October 11)
 
+A subsequent diagnostic adds a second disposable item, V, moves it to the
+visible side beside CPU, and requires V to remain hit-tested/exposed during
+every width step. That run selected 384 points, independently hid Disk, captured
+one Disk image, preserved V, and restored foreign order/exposure and system
+regions; `visibleControlPreserved` and `passed` were true. Both disposable items
+were removed. This verifies placement of an owned visible control without
+changing the saved position of NookBar's real control. It does not yet prove
+normal control interaction or lifecycle recovery with this backend.
+
 The developer-only `--foreign-divider-check --report PATH` creates one disposable
 NookBar divider and moves only that divider between adjacent exposed Stats
 icons. No foreign icon is dragged and no section assignment, saved divider
