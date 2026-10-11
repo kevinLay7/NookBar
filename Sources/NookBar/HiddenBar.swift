@@ -18,10 +18,13 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     var onClose: (() -> Void)?
     var isControlWindow: ((NSWindow?) -> Bool)?
     var isVisible: Bool { panel?.isVisible == true }
-    private var icons: [Icon] = []
+    private(set) var icons: [Icon] = []
     private var searchStack: NSStackView?
     private var searchScroll: NSScrollView?
     private var searchField: NSSearchField?
+    private var iconScroll: NSScrollView?
+    private var presentationAnchor: NSRect?
+    private(set) var screen: NSScreen?
     private var filteredIndices: [Int] = []
     private var searchSelection = 0
     private(set) var isSearching = false
@@ -93,7 +96,7 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
             guard overflowLease?.id == id else { throw BarError.changedIcons }
             let current = NBMenuBarEntries(frame).filter { candidate in entries.contains { NBSameMenuBarEntry($0, candidate) } }
             if current.count == entries.count && entries.allSatisfy({ original in
-                let matches = current.filter { NBSameMenuBarEntry($0, original) && $0.label == original.label }
+                let matches = current.filter { NBSameMenuBarEntryDescriptor($0, original) }
                 return matches.count == 1 && NBMenuBarEntryIsExposed(matches[0])
             }) { ready = current; break }
         } while Date() < deadline
@@ -117,11 +120,12 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         let image = try await SCScreenshotManager.captureImage(in: rect)
         let current = NBMenuBarEntries(rect)
         guard entries.allSatisfy({ entry in
-            let matches = current.filter { NBSameMenuBarEntry($0, entry) }
+            let matches = current.filter { NBSameMenuBarEntryDescriptor($0, entry) }
             return matches.count == 1 && matches[0].frame == entry.frame && NBMenuBarEntryIsExposed(matches[0])
         }) else { throw BarError.changedIcons }
         let sx = CGFloat(image.width) / rect.width, sy = CGFloat(image.height) / rect.height
-        return try entries.map { entry in
+        return try entries.map { original in
+            guard let entry = current.first(where: { NBSameMenuBarEntryDescriptor($0, original) }) else { throw BarError.changedIcons }
             let crop = CGRect(x: (entry.frame.minX - rect.minX) * sx,
                               y: (entry.frame.minY - rect.minY) * sy,
                               width: entry.frame.width * sx, height: entry.frame.height * sy).integral
@@ -132,10 +136,7 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         }
     }
 
-    func show(icons: [Icon], anchor: NSRect, screen: NSScreen, searching: Bool = false, sectionTitle: String = "Hidden") {
-        close(notify: false)
-        self.icons = icons
-        isSearching = searching
+    private func makeIconRow() -> NSStackView {
         let row = NSStackView()
         row.orientation = .horizontal
         row.spacing = 4
@@ -151,6 +152,45 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
             button.heightAnchor.constraint(equalToConstant: 30).isActive = true
             row.addArrangedSubview(button)
         }
+        return row
+    }
+
+    func update(icons: [Icon]) {
+        guard let panel, let screen, let anchor = presentationAnchor else { return }
+        let selected = filteredIndices.indices.contains(searchSelection) ? self.icons[filteredIndices[searchSelection]].entry : nil
+        self.icons = icons
+        if isSearching {
+            let origin = searchScroll?.contentView.bounds.origin ?? .zero
+            let matches = Self.matchingIndices(in: icons, query: searchField?.stringValue ?? "")
+            if let selected, let position = matches.firstIndex(where: { index in
+                icons[index].entry.map { NBSameMenuBarEntryDescriptor($0, selected) } ?? false
+            }) { searchSelection = position }
+            else { searchSelection = min(searchSelection, max(0, matches.count - 1)) }
+            updateSearch(scrollToSelection: false)
+            searchScroll?.contentView.scroll(to: origin)
+            if let searchScroll { searchScroll.reflectScrolledClipView(searchScroll.contentView) }
+        } else if let scroll = iconScroll {
+            let origin = scroll.contentView.bounds.origin
+            let row = makeIconRow()
+            let width = row.fittingSize.width
+            let visibleWidth = min(width, screen.frame.width - 32)
+            row.frame = NSRect(x: 0, y: 0, width: width, height: 44)
+            scroll.documentView = row
+            scroll.hasHorizontalScroller = width > visibleWidth
+            let x = min(max(anchor.midX - visibleWidth / 2, screen.frame.minX + 8), screen.frame.maxX - visibleWidth - 8)
+            panel.setFrame(NSRect(x: x, y: panel.frame.minY, width: visibleWidth, height: panel.frame.height), display: true)
+            scroll.contentView.scroll(to: origin)
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+    }
+
+    func show(icons: [Icon], anchor: NSRect, screen: NSScreen, searching: Bool = false, sectionTitle: String = "Hidden") {
+        close(notify: false)
+        self.icons = icons
+        self.screen = screen
+        presentationAnchor = anchor
+        isSearching = searching
+        let row = makeIconRow()
         let width = row.fittingSize.width
         let visibleWidth = min(searching ? 380 : width, screen.frame.width - 32)
         let height: CGFloat = searching ? min(340, screen.visibleFrame.height - 40) : 44
@@ -192,6 +232,7 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         } else {
             row.frame = NSRect(x: 0, y: 0, width: width, height: 44)
             scroll.documentView = row
+            iconScroll = scroll
         }
         effect.addSubview(scroll)
         panel.contentView = effect
@@ -200,10 +241,12 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         self.panel = panel
         panel.makeKeyAndOrderFront(nil)
         if let searchField { panel.makeFirstResponder(searchField) }
-        outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+        outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard !NBIsOwnMenuBarOverflowEvent(event.cgEvent) else { return }
             MainActor.assumeIsolated { self?.close() }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            if NBIsOwnMenuBarOverflowEvent(event.cgEvent) { return event }
             MainActor.assumeIsolated {
                 if event.window !== self?.panel && self?.isControlWindow?(event.window) != true { self?.close() }
             }
@@ -229,7 +272,7 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         }
     }
 
-    private func updateSearch() {
+    private func updateSearch(scrollToSelection: Bool = true) {
         guard let list = searchStack, let scroll = searchScroll else { return }
         filteredIndices = Self.matchingIndices(in: icons, query: searchField?.stringValue ?? "")
         for view in list.arrangedSubviews { list.removeArrangedSubview(view); view.removeFromSuperview() }
@@ -256,7 +299,7 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         }
         list.frame = NSRect(x: 0, y: 0, width: width, height: list.fittingSize.height)
         list.layoutSubtreeIfNeeded()
-        if list.arrangedSubviews.indices.contains(searchSelection) {
+        if scrollToSelection && list.arrangedSubviews.indices.contains(searchSelection) {
             list.scrollToVisible(list.arrangedSubviews[searchSelection].frame)
         }
     }
@@ -278,6 +321,7 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         panel = nil
         icons = []
         searchStack = nil; searchScroll = nil; searchField = nil
+        iconScroll = nil; screen = nil; presentationAnchor = nil
         filteredIndices = []; isSearching = false
         if notify && wasVisible { onClose?() }
     }

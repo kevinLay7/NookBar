@@ -16,7 +16,9 @@ BOOL NBMenuBarEntryIsExposed(NBMenuBarEntry *entry);
 // -1 means no exposed overflow control on this display, 0 collapsed, 1 expanded.
 NSInteger NBMenuBarOverflowState(CGRect screenFrame);
 BOOL NBSetMenuBarOverflowExpanded(CGRect screenFrame, BOOL expanded);
+BOOL NBIsOwnMenuBarOverflowEvent(CGEventRef _Nullable event);
 BOOL NBSameMenuBarEntry(NBMenuBarEntry *first, NBMenuBarEntry *second);
+BOOL NBSameMenuBarEntryDescriptor(NBMenuBarEntry *first, NBMenuBarEntry *second);
 NBMenuBarEntry * _Nullable NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame);
 BOOL NBPressMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame);
 BOOL NBMenuIsOpen(NSString *bundle);

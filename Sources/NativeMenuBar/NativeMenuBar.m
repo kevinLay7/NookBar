@@ -6,10 +6,22 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <dlfcn.h>
 #import <objc/message.h>
+#import <unistd.h>
+static const int64_t OverflowEventMarker = 0x4E424F46;
+
+BOOL NBIsOwnMenuBarOverflowEvent(CGEventRef event) {
+    return event && CGEventGetIntegerValueField(event, kCGEventSourceUserData) == OverflowEventMarker &&
+        CGEventGetIntegerValueField(event, kCGEventSourceUnixProcessID) == getpid();
+}
 static id Attribute(AXUIElementRef element, CFStringRef key) {
     CFTypeRef value = NULL;
     if (AXUIElementCopyAttributeValue(element, key, &value) != kAXErrorSuccess) return nil;
     return CFBridgingRelease(value);
+}
+
+static NSString *TextAttribute(AXUIElementRef element, CFStringRef key) {
+    id value = Attribute(element, key);
+    return [value isKindOfClass:NSString.class] ? value : @"";
 }
 
 @interface NBMenuBarEntry ()
@@ -19,6 +31,8 @@ static id Attribute(AXUIElementRef element, CFStringRef key) {
 @property(nonatomic, strong) id element;
 @property(nonatomic, strong) NSRunningApplication *owner;
 @property(nonatomic, strong) NSDate *launchDate;
+@property(nonatomic, copy) NSString *descriptorKind;
+@property(nonatomic, copy) NSString *descriptor;
 @end
 @implementation NBMenuBarEntry
 @end
@@ -48,10 +62,14 @@ static void CollectEntries(AXUIElementRef element, CGRect screen, CGRect region,
             NBMenuBarEntry *entry = [NBMenuBarEntry new];
             entry.bundle = app.bundleIdentifier; entry.frame = frame; entry.element = (__bridge id)element;
             entry.owner = app; entry.launchDate = app.launchDate;
-            NSString *title = Attribute(element, kAXDescriptionAttribute);
-            if (!title.length) title = Attribute(element, kAXTitleAttribute);
-            if (!title.length) title = Attribute(element, kAXHelpAttribute);
-            entry.label = title.length ? title : (app.localizedName ?: entry.bundle);
+            NSString *description = TextAttribute(element, kAXDescriptionAttribute);
+            NSString *title = TextAttribute(element, kAXTitleAttribute);
+            NSString *identifier = TextAttribute(element, kAXIdentifierAttribute);
+            entry.descriptorKind = identifier.length ? @"identifier" : (description.length ? @"description" : (title.length ? @"title" : @"none"));
+            entry.descriptor = identifier.length ? identifier : (description.length ? description : title);
+            NSString *label = description.length ? description : title;
+            if (!label.length) label = TextAttribute(element, kAXHelpAttribute);
+            entry.label = label.length ? label : (app.localizedName ?: entry.bundle);
             // Several collapsed icons can share one positive frame. Deduplicate
             // replicated AX trees by identity instead of dropping those icons.
             for (NBMenuBarEntry *existing in entries) {
@@ -151,6 +169,13 @@ BOOL NBMenuBarEntryIsExposed(NBMenuBarEntry *entry) {
     return NBMenuBarEntryMatchesPoint(entry, CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame)));
 }
 
+BOOL NBSameMenuBarEntryDescriptor(NBMenuBarEntry *first, NBMenuBarEntry *second) {
+    // AXHelp is a tooltip, not an identity label. For example, fan RPM changes
+    // update help while the AX/process identity and primary descriptor persist.
+    return NBSameMenuBarEntry(first, second) && [first.descriptorKind isEqual:second.descriptorKind] &&
+        [first.descriptor isEqual:second.descriptor];
+}
+
 static AXUIElementRef CopyOverflowControl(CGRect screenFrame, NSInteger *state) {
     *state = -1;
     if (!AXIsProcessTrusted()) return NULL;
@@ -214,6 +239,8 @@ BOOL NBSetMenuBarOverflowExpanded(CGRect screenFrame, BOOL expanded) {
         CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
         CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
         if (cursor && down && up) {
+            CGEventSetIntegerValueField(down, kCGEventSourceUserData, OverflowEventMarker);
+            CGEventSetIntegerValueField(up, kCGEventSourceUserData, OverflowEventMarker);
             CGEventSetFlags(down, 0); CGEventSetFlags(up, 0);
             CGEventPost(kCGHIDEventTap, down); CGEventPost(kCGHIDEventTap, up);
             CGEventRef restore = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, CGEventGetLocation(cursor), kCGMouseButtonLeft);
@@ -231,7 +258,7 @@ BOOL NBSetMenuBarOverflowExpanded(CGRect screenFrame, BOOL expanded) {
 NBMenuBarEntry *NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame) {
     NSArray *matches = [NBMenuBarEntries(screenFrame) filteredArrayUsingPredicate:
         [NSPredicate predicateWithBlock:^BOOL(NBMenuBarEntry *candidate, NSDictionary *bindings) {
-            return NBSameMenuBarEntry(candidate, entry) && [candidate.label isEqual:entry.label];
+            return NBSameMenuBarEntryDescriptor(candidate, entry);
         }]];
     // Reject missing, ambiguous, renamed, or restarted items without guessing an
     // ordinal. macOS may still reuse an AX identity for same-label replacements.

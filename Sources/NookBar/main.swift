@@ -68,8 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var status = "Choose apps to tuck away."
     private var settingsMenu: NSMenu?
     private let hiddenBar = HiddenBar()
-    private var cachedIcons: [HiddenBar.Icon] = []
-    private var cachedScreenFrame: CGRect?
+    private var iconRefreshTask: Task<Void, Never>?
+    private var lastIconRefresh = Date.distantPast
     private var menuWatch: Timer?
     private var emptyBarMonitor: Any?
     private var requestedBarAnchor: (NSRect, NSScreen)?
@@ -92,7 +92,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hoverSuppressed = false
     private var emptyClickWasVisible = false
     private var temporaryBundle: String?
-    private var cachedIncludesVisible = false
     private var pointerEnteredPresentation = false
     private var pointerLeftPresentation: Date?
     private var spacingProbeItems: [NSStatusItem] = []
@@ -185,6 +184,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Task { await self.runOverflowCheck() }
             return
         }
+        if CommandLine.arguments.contains("--refresh-check") {
+            Task { await self.runRefreshCheck() }
+            return
+        }
         if CommandLine.arguments.contains("--separator-lab") {
             let lab = SeparatorLab(); separatorLab = lab; lab.show()
             return
@@ -235,7 +238,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self, !isPending, !arrangingIcons, temporaryBundle == nil else { return false }
             relaunchingMenuApps = true
             self.restore(message: "Apps restored while menu bar apps relaunch.", clearIntent: false)
-            cachedIcons = []
             return true
         }
         spacing.onEndRelaunch = { [weak self] in
@@ -274,7 +276,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if (self.visibility.active || self.isPending) && !AXIsProcessTrusted() {
                     self.restore(message: "Apps restored because Accessibility access was removed.")
                 } else if bundles != self.runningBundles && self.visibilityRequested && !self.isPending && !self.arrangingIcons {
-                    self.cachedIcons = []
                     if let temporary = self.temporaryBundle, NBMenuIsOpen(temporary) {
                         self.runningBundles = bundles
                     } else if self.nativeItemsRevealed {
@@ -286,7 +287,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         behaviorTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.checkHoverAndRehide() }
+            MainActor.assumeIsolated {
+                self?.checkHoverAndRehide()
+                self?.refreshDisplayedIcons()
+            }
         }
         if selected.isEmpty || CommandLine.arguments.contains("--choose-apps") { chooseApps() }
         if ["--settings", "--appearance", "--spacing"].contains(where: CommandLine.arguments.contains),
@@ -354,6 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func restore(message: String, clearIntent: Bool = true) {
+        iconRefreshTask?.cancel(); iconRefreshTask = nil
         HiddenBar.restoreOverflow()
         if clearIntent { visibilityRequested = false }
         nativeItemsRevealed = false
@@ -366,9 +371,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hiddenBar.close(notify: false)
         controlPanel?.orderOut(nil)
         controlPanel = nil
-        cachedIcons = []
-        cachedScreenFrame = nil
-        cachedIncludesVisible = false
         visibility.restore()
         isPending = false
         setStatus(message)
@@ -487,7 +489,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func handleMenuBarEvent(_ event: NSEvent) {
-        guard !arrangingIcons else { return }
+        guard !arrangingIcons, !NBIsOwnMenuBarOverflowEvent(event.cgEvent) else { return }
         let point = NSEvent.mouseLocation
         if event.type == .leftMouseDown {
             emptyClickWasVisible = hiddenBar.isVisible || nativeItemsRevealed
@@ -656,20 +658,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         visibilityRequested = !selected.isEmpty
-        if visibility.active && !cachedIcons.isEmpty && cachedScreenFrame == screen.frame && (!searching || cachedIncludesVisible) {
-            let icons = searching ? cachedIcons : cachedIcons.filter { sections.bundles(in: section).contains($0.bundle) }
-            guard !icons.isEmpty else {
-                chooseApps()
-                setStatus("No icons from the \(section.title) section are available on this display.")
-                return
-            }
-            presentedSection = section
-            presentationStarted = Date()
-            pointerEnteredPresentation = pointerInMenuBar(NSEvent.mouseLocation)
-            pointerLeftPresentation = nil
-            hiddenBar.show(icons: icons, anchor: anchor, screen: screen, searching: searching, sectionTitle: section.title)
-            return
-        }
         // Restore for one fresh capture, then hide again before displaying the strip.
         restore(message: "Loading menu bar icons…", clearIntent: false)
         let generation = operation
@@ -685,9 +673,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard generation == operation else { return }
                 isPending = false
                 if let error { restore(message: error); return }
-                cachedIcons = icons
-                cachedScreenFrame = screen.frame
-                cachedIncludesVisible = searching
+                lastIconRefresh = Date()
                 presentedSection = section
                 let shown = searching ? icons : icons.filter { sections.bundles(in: section).contains($0.bundle) }
                 guard !shown.isEmpty else { throw HiddenBar.BarError.noIcons }
@@ -707,7 +693,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func refreshDisplayedIcons() {
+        guard hiddenBar.isVisible, let screen = hiddenBar.screen, !isPending, !arrangingIcons,
+              !relaunchingMenuApps, temporaryBundle == nil, NSEvent.pressedMouseButtons == 0,
+              Date().timeIntervalSince(lastIconRefresh) >= 3 else { return }
+        lastIconRefresh = Date()
+        let searching = hiddenBar.isSearching
+        let section = presentedSection
+        let targets = selected.intersection(currentBundles())
+        let bundles = searching ? Set(currentBundles().filter { !$0.hasPrefix("com.apple.") && $0 != Bundle.main.bundleIdentifier }) : targets
+        operation += 1
+        let generation = operation
+        isPending = true
+        visibility.restore()
+        iconRefreshTask = Task { [self] in
+            defer { if generation == operation { iconRefreshTask = nil; isPending = false } }
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                let icons = try await HiddenBar.capture(bundles: bundles, screen: screen)
+                guard generation == operation, !Task.isCancelled else { return }
+                if !targets.isEmpty, let error = await activate(Array(targets)) {
+                    guard generation == operation else { return }
+                    restore(message: error); return
+                }
+                guard generation == operation, !Task.isCancelled else { return }
+                let shown = searching ? icons : icons.filter { sections.bundles(in: section).contains($0.bundle) }
+                guard !shown.isEmpty else { throw HiddenBar.BarError.noIcons }
+                if hiddenBar.isVisible { hiddenBar.update(icons: shown) }
+            } catch {
+                guard generation == operation else { return }
+                restore(message: error.localizedDescription)
+            }
+        }
+    }
+
     private func openHiddenIcon(_ icon: HiddenBar.Icon) {
+        if iconRefreshTask != nil {
+            iconRefreshTask?.cancel(); iconRefreshTask = nil
+            HiddenBar.restoreOverflow()
+            isPending = false
+        }
+        guard !isPending else { return }
         guard let entry = icon.entry, let (_, screen) = barAnchor() else { showAll(); return }
         operation += 1
         let generation = operation
@@ -929,6 +955,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        iconRefreshTask?.cancel()
         HiddenBar.restoreOverflow()
         appearance.stop()
         arrangementWindow.cancel()
@@ -1020,6 +1047,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             } catch { report["automaticCaptureError"] = error.localizedDescription; report["passed"] = false }
         } else { report["passed"] = false }
+        if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
+           let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), options: .atomic)
+        }
+        NSApp.terminate(nil)
+    }
+
+    private func runRefreshCheck() async {
+        var report: [String: Any] = [:]
+        defer { restore(message: "Refresh check finished.") }
+        do {
+            guard let screen = NSScreen.screens.first, let button = statusItem?.button else { throw HiddenBar.BarError.noIcons }
+            let own = Bundle.main.bundleIdentifier ?? "com.codenest.nookbar"
+            button.setAccessibilityLabel("NookBar refresh check")
+            button.image = NSImage(systemSymbolName: "1.circle", accessibilityDescription: "NookBar refresh check")
+            button.image?.isTemplate = true
+            button.toolTip = "Tick 1"
+            try await Task.sleep(for: .seconds(2))
+            let entries = NBMenuBarEntries(HiddenBar.captureFrame(for: screen)).filter {
+                $0.bundle == own && (spacingProbeItems.isEmpty || $0.label.hasPrefix("NookBar spacing probe S"))
+            }
+            report["discoveredCount"] = entries.count
+            report["initialOverflow"] = NBMenuBarOverflowState(HiddenBar.captureFrame(for: screen))
+            let icons = try await HiddenBar.capture(entries: entries, screen: screen)
+            report["initialCaptureCount"] = icons.count
+            hiddenBar.show(icons: icons, anchor: NSRect(x: screen.frame.midX, y: screen.frame.maxY, width: 1, height: 1), screen: screen)
+            var previous = icons.first?.image.tiffRepresentation
+            var refreshed = true
+            for tick in 2...3 {
+                button.image = NSImage(systemSymbolName: "\(tick).circle", accessibilityDescription: "NookBar refresh check")
+                button.image?.isTemplate = true
+                button.toolTip = "Tick \(tick)"
+                for probe in spacingProbeItems {
+                    probe.button?.image = NSImage(systemSymbolName: "\(tick).circle", accessibilityDescription: "NookBar spacing probe S\(probe.button?.tag ?? 0)")
+                    probe.button?.image?.isTemplate = true
+                }
+                try await Task.sleep(for: .milliseconds(250))
+                let currentEntries = NBMenuBarEntries(HiddenBar.captureFrame(for: screen)).filter {
+                    $0.bundle == own && (spacingProbeItems.isEmpty || $0.label.hasPrefix("NookBar spacing probe S"))
+                }
+                report["tick\(tick)DiscoveredCount"] = currentEntries.count
+                report["tick\(tick)OverflowBeforeCapture"] = NBMenuBarOverflowState(HiddenBar.captureFrame(for: screen))
+                hiddenBar.update(icons: try await HiddenBar.capture(entries: currentEntries, screen: screen))
+                let current = hiddenBar.icons.first?.image.tiffRepresentation
+                let changed = current != nil && current != previous
+                report["tick\(tick)PixelsChanged"] = changed
+                report["tick\(tick)PanelVisible"] = hiddenBar.isVisible
+                report["tick\(tick)IconCount"] = hiddenBar.icons.count
+                refreshed = refreshed && changed && hiddenBar.isVisible
+                previous = current
+            }
+            report["passed"] = refreshed
+        } catch { report["error"] = error.localizedDescription; report["passed"] = false }
         if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
            let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), options: .atomic)
@@ -1165,6 +1245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let restored = report["foreignIdentityRestored"] as? Bool { passed = passed && restored }
         if let rejected = report["hiddenIdentityRejected"] as? Bool { passed = passed && rejected }
         if let restored = report["liveIdentitiesRestored"] as? Bool { passed = passed && restored }
+        if let resolved = report["liveEntriesResolvable"] as? Bool { passed = passed && resolved }
         if let discovered = report["entryDiscovery"] as? Bool { passed = passed && discovered }
         if let captured = report["iconCapture"] as? Bool { passed = passed && captured }
         report["passed"] = passed

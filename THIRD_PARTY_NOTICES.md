@@ -24,6 +24,12 @@ Copyright (C) 2024 Jordan Baird, GPL-3.0-or-later. NookBar uses CFPreferences,
 transaction rollback, a persisted restoration snapshot, and an explicit app
 selection dialog with graceful quit requests.
 
+The three-second image refresh cadence while the strip/search is displayed follows
+Ice's `Ice/MenuBar/MenuBarItems/MenuBarItemImageCache.swift` at the same commit.
+Copyright (C) 2024 Jordan Baird, GPL-3.0-or-later. NookBar uses its own region
+capture and in-place view update; Ice's per-window capture implementation is not
+used here.
+
 These projects are not runtime dependencies. The adapted bridge is compiled
 as part of NookBar. Apple framework names describe system dependencies and do
 not imply Apple's endorsement.

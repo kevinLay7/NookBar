@@ -88,12 +88,15 @@ hiding/showing, and required for the actual icon strip. Opening a hidden item us
 its Accessibility press action; unsupported items restore the bar instead of
 launching the app as a substitute. The original menu opens at its native menu bar
 location. Activation checks its original live Accessibility identity, owning
-process lifetime, and captured description instead of guessing its ordinal within
+process lifetime, and primary Accessibility descriptor instead of guessing its ordinal within
 the app. Missing or renamed items restore the bar and ask you to refresh. macOS
 can reuse identities for same-label replacements, so complete replacement
 isolation remains unproven. Captures are rejected if icon positions change while
-the screenshot is being taken. A first capture briefly reveals selected icons; cached images are refreshed
-when the strip is rebuilt.
+the screenshot is being taken. Tooltip values such as fan RPM can change without
+invalidating the item's primary descriptor. Each opening captures fresh images,
+and the displayed strip/search refreshes every three seconds while idle. Search
+text and selection are retained. This capture method briefly reveals native
+icons during refresh; avoiding that visible interruption remains a parity task.
 
 ## Build
 
