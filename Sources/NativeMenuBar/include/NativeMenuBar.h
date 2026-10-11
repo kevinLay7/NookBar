@@ -12,6 +12,7 @@ NSDictionary *NBMenuBarSnapshot(void);
 @end
 NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame);
 BOOL NBMenuBarEntryMatchesPoint(NBMenuBarEntry *entry, CGPoint point);
+BOOL NBMenuBarEntryIsExposed(NBMenuBarEntry *entry);
 BOOL NBSameMenuBarEntry(NBMenuBarEntry *first, NBMenuBarEntry *second);
 NBMenuBarEntry * _Nullable NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame);
 BOOL NBPressMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame);

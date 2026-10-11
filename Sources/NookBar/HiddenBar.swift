@@ -51,13 +51,14 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
 
     static func capture(entries: [NBMenuBarEntry]) async throws -> [Icon] {
         guard !entries.isEmpty else { throw BarError.noIcons }
+        guard entries.allSatisfy({ NBMenuBarEntryIsExposed($0) }) else { throw BarError.obscuredIcons }
         // Only the icon rectangles' bounding strip is sampled. Images never leave memory.
         let rect = entries.reduce(CGRect.null) { $0.union($1.frame) }.integral
         let image = try await SCScreenshotManager.captureImage(in: rect)
         let current = NBMenuBarEntries(rect)
         guard entries.allSatisfy({ entry in
             let matches = current.filter { NBSameMenuBarEntry($0, entry) }
-            return matches.count == 1 && matches[0].frame == entry.frame
+            return matches.count == 1 && matches[0].frame == entry.frame && NBMenuBarEntryIsExposed(matches[0])
         }) else { throw BarError.changedIcons }
         let sx = CGFloat(image.width) / rect.width, sy = CGFloat(image.height) / rect.height
         return try entries.map { entry in
@@ -222,11 +223,12 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     }
 
     enum BarError: LocalizedError {
-        case noIcons, changedIcons
+        case noIcons, changedIcons, obscuredIcons
         var errorDescription: String? {
             switch self {
             case .noIcons: "Could not capture the selected menu bar icons on this display. Show All, then try again."
             case .changedIcons: "The menu bar changed while its icons were being captured. Refresh or reopen the strip."
+            case .obscuredIcons: "Some selected icons are in macOS’s overflow or covered by another window. Expand them with the menu bar’s chevron, then reopen NookBar."
             }
         }
     }

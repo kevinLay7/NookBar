@@ -220,3 +220,47 @@ subscriptions. Apple documents this return value for unsupported observations
 This runtime provides no tested notification path for that invalidation. Further
 research is required; polling cannot prove that a remove/recreate cycle did not
 occur entirely between reads.
+
+## Native overflow capture reproduction
+
+October 11, 2026, macOS 27.0.1 (26A434), built-in display. The developer-only
+`--overflow-probe` creates 24 numbered NookBar status items without saved positions.
+Normal launch creates none. With the app-wide assertion released, independent
+AX traversal returned S4 through S24 at the same positive frame:
+`(1151, 7.5, 33.5, 24)`. Every center hit test resolved to MenuBarAgent's
+`AXButton` labeled `Show Hidden Menu Bar Items`, not the original icon. A settled
+menu-region image showed the overflow chevron and S1/S2/S3, with none of S4–S24.
+The three visible entries hit their original AX identities.
+
+NookBar's existing bundle-and-frame deduplication collapses those 21 entries
+into one representative. It is therefore unsuitable as a complete overflow
+inventory; a successful positive frame query cannot prove visible pixels.
+
+Capture now requires each entry's unchanged live frame and matching center hit
+test both before capture and after the screenshot returns. Native activation
+uses the same exposure check after identity resolution. An obscured capture
+fails explicitly, leaving apps revealed, rather than caching another control's
+pixels or silently omitting requested icons. Same-label replacement identity
+and brief changes entirely between samples remain unresolved.
+
+The installed signed app's `--overflow-probe --overflow-check --report PATH`
+performs a read/capture-only regression on its own disposable icons. The live
+report returned one collapsed representative, three exposed entries,
+`collapsedCaptureRejected: true`, `visibleCaptureCount: 3`, and `passed: true`.
+It does not press an icon or establish automatic overflow expansion. That path,
+and a complete inventory retaining separate collapsed identities, remain needed
+for full hidden-strip parity.
+
+REA/Hopper also traced `AssignCollapsedOverflowFramesPass`'s string at
+`0x1003605d0` to Swift type metadata at `0x10038a898`. Its code reference at
+`0x10022cfc0` belongs to the metadata accessor `sub_10022cfbc`, which calls
+`swift_getGenericMetadata`; this is not the layout pass body or a callable
+third-party visibility API. Evidence:
+`ev_8f4e9b92392b68e13aa18b48a1afb656ec98b19e8aaafb71b870e2ead101f43c`,
+`ev_ff501c483015e8893c1a41524651928f32299067ea23c3408d030a5d14004226`,
+`ev_48a1e084885300db23a20ccc544ea67b630380a8da93ad46640f3a7c68b90f70`.
+The overview's document name ends in `arm64e.hop`, but byte reads at the overflow
+string and `0x10032f138` match the selected `arm64e.x1` slice, not `arm64e`.
+Binding evidence:
+`ev_da218dc275dffb4882cfc61fcbc17f4fae66f1989ebbb1984c3c24c12cad530e`,
+`ev_84167acf7abc24c525e1f68aaccccfdf2af3669c0290a190f7829511ce0a9b31`.

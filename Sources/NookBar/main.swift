@@ -153,9 +153,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.action = #selector(statusClicked)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
-        // Developer-only native spacing probe. No persisted positions or foreign icons change.
-        if CommandLine.arguments.contains("--spacing-probe") {
-            for index in 1...3 {
+        // Developer-only native spacing/overflow probes. No saved positions change.
+        let overflowProbe = CommandLine.arguments.contains("--overflow-probe")
+        if CommandLine.arguments.contains("--spacing-probe") || overflowProbe {
+            for index in 1...(overflowProbe ? 24 : 3) {
                 let probe = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
                 probe.button?.image = NSImage(systemSymbolName: "\(index).circle", accessibilityDescription: "NookBar spacing probe S\(index)")
                 probe.button?.image?.isTemplate = true
@@ -174,6 +175,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if CommandLine.arguments.contains("--self-test") {
             Task { await self.runSelfTest() }
+            return
+        }
+        if CommandLine.arguments.contains("--overflow-check") {
+            Task { await self.runOverflowCheck() }
             return
         }
         if CommandLine.arguments.contains("--separator-lab") {
@@ -927,6 +932,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         controlPanel?.orderOut(nil)
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         visibility.restore()
+    }
+
+    private func runOverflowCheck() async {
+        // Read/capture only our disposable probe items; no foreign item actions.
+        try? await Task.sleep(for: .seconds(2))
+        var report: [String: Any] = [:]
+        if let screen = NSScreen.screens.first {
+            let entries = NBMenuBarEntries(HiddenBar.captureFrame(for: screen)).filter {
+                $0.bundle == Bundle.main.bundleIdentifier && $0.label.hasPrefix("NookBar spacing probe")
+            }
+            let exposed = entries.filter { NBMenuBarEntryIsExposed($0) }
+            let collapsed = entries.filter { !NBMenuBarEntryIsExposed($0) }
+            report["discovered"] = entries.map(\.label)
+            report["exposed"] = exposed.map(\.label)
+            report["collapsed"] = collapsed.map(\.label)
+            var rejected = false
+            do { _ = try await HiddenBar.capture(entries: entries) }
+            catch HiddenBar.BarError.obscuredIcons { rejected = true }
+            catch { report["captureError"] = error.localizedDescription }
+            report["collapsedCaptureRejected"] = rejected
+            do {
+                let icons = try await HiddenBar.capture(entries: exposed)
+                report["visibleCaptureCount"] = icons.count
+                report["passed"] = !collapsed.isEmpty && rejected && exposed.count == 3 && icons.count == exposed.count
+            } catch { report["visibleCaptureError"] = error.localizedDescription; report["passed"] = false }
+        } else { report["passed"] = false }
+        if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
+           let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), options: .atomic)
+        }
+        NSApp.terminate(nil)
     }
 
     private func runSelfTest() async {

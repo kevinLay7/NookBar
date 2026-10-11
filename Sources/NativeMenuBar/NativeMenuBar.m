@@ -114,6 +114,15 @@ BOOL NBSameMenuBarEntry(NBMenuBarEntry *first, NBMenuBarEntry *second) {
         CFEqual((__bridge CFTypeRef)first.element, (__bridge CFTypeRef)second.element);
 }
 
+BOOL NBMenuBarEntryIsExposed(NBMenuBarEntry *entry) {
+    if (!entry.element || !entry.owner || entry.owner.isTerminated) return NO;
+    CGRect frame = ElementFrame((__bridge AXUIElementRef)entry.element);
+    if (!CGRectEqualToRect(frame, entry.frame) || frame.size.width <= 0 || frame.size.height <= 0) return NO;
+    // Collapsed overflow items retain positive AX frames over the native overflow
+    // button. Their geometry alone does not identify the pixels being sampled.
+    return NBMenuBarEntryMatchesPoint(entry, CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame)));
+}
+
 NBMenuBarEntry *NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame) {
     NSArray *matches = [NBMenuBarEntries(screenFrame) filteredArrayUsingPredicate:
         [NSPredicate predicateWithBlock:^BOOL(NBMenuBarEntry *candidate, NSDictionary *bindings) {
@@ -126,7 +135,7 @@ NBMenuBarEntry *NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame)
 
 BOOL NBPressMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame) {
     NBMenuBarEntry *current = NBResolveMenuBarEntry(entry, screenFrame);
-    if (!current) return NO;
+    if (!current || !NBMenuBarEntryIsExposed(current)) return NO;
     return AXUIElementPerformAction((__bridge AXUIElementRef)current.element, kAXPressAction) == kAXErrorSuccess;
 }
 

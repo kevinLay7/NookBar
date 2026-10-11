@@ -250,3 +250,23 @@ app lifecycle changes, and unexpected exit remain unvalidated.
 - Pending: broad third-party and system-item rendering, other displays, custom
   pre-existing spacing GUI restoration, launches that fail, logout behavior, and
   combinations with icon arrangement, appearance overlays, and native overflow.
+
+### Native overflow exposure regression — October 11, 2026
+
+- The installed signed app's `--overflow-probe --overflow-check --report PATH`
+  created 24 disposable numbered icons. Independent AX traversal and a settled
+  menu-region capture established S4–S24 were collapsed over macOS's overflow
+  button, while S1/S2/S3 were visible and hit their actual AX identities.
+- The bridge's frame deduplication returned one collapsed representative and
+  three visible entries. Capture rejected the collapsed representative with
+  `obscuredIcons`; capture of the three exposed entries returned three images.
+  The report recorded `collapsedCaptureRejected: true`,
+  `visibleCaptureCount: 3`, and `passed: true`.
+- `scripts/check.sh` passed. Normal installed launch removed the probe items;
+  its independent snapshot returned 44 groups and four NookBar occurrences.
+  The saved seven-app hidden membership was preserved, and the host spacing
+  preference remained absent.
+- Pending: automatic expansion/capture/restoration of the native overflow group,
+  retaining all collapsed identities, physical activation under overflow, other
+  displays, and replacement-proof identity. This regression proves exposure
+  rejection and visible capture on this display, not full Ice parity.
