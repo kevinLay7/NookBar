@@ -1,0 +1,25 @@
+#import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
+
+NS_ASSUME_NONNULL_BEGIN
+// Returns an error instead of confusing a failed AX query with an empty menu bar.
+NSDictionary *NBMenuBarSnapshot(void);
+
+@interface NBMenuBarEntry : NSObject
+@property(nonatomic, readonly) NSString *bundle;
+@property(nonatomic, readonly) NSString *label;
+@property(nonatomic, readonly) CGRect frame;
+@end
+NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame);
+BOOL NBPressMenuBarEntry(NSString *bundle, NSUInteger index, CGRect screenFrame);
+BOOL NBMenuIsOpen(NSString *bundle);
+BOOL NBIsEmptyMenuBarPoint(CGPoint point);
+CGRect NBEmptyStatusSlot(CGRect screenFrame, CGRect expectedFrame);
+
+@interface NBVisibilityController : NSObject
+@property(nonatomic, readonly) BOOL active;
+- (void)hideBundles:(NSArray<NSString *> *)bundles
+         completion:(void (^)(BOOL success, NSString * _Nullable message))completion;
+- (void)restore;
+@end
+NS_ASSUME_NONNULL_END

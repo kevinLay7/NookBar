@@ -1,0 +1,83 @@
+Ice replacement investigation — October 11, 2026
+
+This records the initial research, before the NookBar prototype was implemented.
+See SMOKE_TEST.md for later runtime results and remaining validation.
+
+Observed environment
+macOS 27.0.1, build 26A434. Running /Applications/Ice.app, version
+0.11.13-dev.2, build 1120, built against macOS SDK 26.0. Its MenuBarItemService
+XPC process is also running. Use Ice Bar is enabled in its settings.
+Installed executable SHA-256:
+19297ef972e4142d0ac2d57ff2c0677978ceb8da381a0b3913c2cef178ea7a85
+
+What Ice does
+Public source at tag 0.11.13-dev.2 (commit da2dd23) uses NSStatusItem separators
+whose hidden width is 10,000 points, pushing items to their left out of view.
+Visible, Hidden, and Always Hidden are sections. It discovers icon windows
+with CGSGetProcessMenuBarWindowList and filters out the main menu window.
+The macOS 26 discovery path uses its XPC service to identify source processes.
+Its separate Ice Bar displays captured icon images and forwards interactions.
+Additional features include hover/click/scroll activation, automatic rehiding,
+shortcuts, icon layout, spacing and menu bar appearance.
+
+REA observations
+Opened and inspected the actual installed universal Mach-O, analyzing arm64.
+Verified imports of the private CGS window discovery functions. Decompiled
+ControlItem performAction and toggleMenuBarSectionFor: plus their helpers.
+This establishes shipped dependencies and control dispatch, not complete
+source equivalence or runtime reachability of every branch.
+
+Confirmed discovery incompatibility on this Mac
+A read-only standalone reproduction of Ice's private discovery API and its
+itemsOnly filter was run through REA capture_process_scenario. The API succeeded
+and returned exactly one window, id 13800, at level 24 (main menu). Ice's filter
+rejected it, retaining zero icon windows. This directly demonstrates the failure
+of its discovery model here, without attaching a debugger to Ice or changing
+permissions. It is a controlled reproduction, not an inspection of Ice's heap.
+Source IceBar.swift shows that an empty managedItems cache displays
+"Loading menu bar items…" indefinitely. Actual on-screen loading was not captured.
+The oversized separator's collapse behavior was not independently exercised.
+
+Native UI inspection limitation
+REA refused the selected settings window because its CG geometry disagreed
+with its Accessibility geometry. A background click was also refused. No
+settings were changed. The window mismatch must not be treated as proof that
+Ice's settings window itself is broken.
+
+Replacement feasibility
+Ice 2's maintained source documents a macOS 27 backend using Accessibility
+discovery and private MenuBarClientCore assessment assertions. A separate
+read-only REA probe on this Mac confirmed that the framework loads and the
+configuration initializer, activation and invalidation selectors exist.
+No assessment assertion was activated. Hiding effectiveness, permissions,
+collateral system-icon effects and restoration remain untested locally.
+
+Proposed first version
+Native Swift/AppKit utility with a small Objective-C runtime bridge. Focus first
+on selecting apps, one-click hide/reveal, a shortcut, optional automatic rehide,
+launch at login, and restoring visibility on quit or failure. Stable identities
+should use app bundle identifiers rather than invented icon window IDs.
+Validate repeated toggles, app launches/exits, sleep/wake, Spaces, multiple
+displays, permission revocation and abnormal termination on macOS 27.0.1.
+The observed fork's backend controls visibility per app, across displays;
+multiple icons from one app share visibility. Clock, Control Center and some
+system items have limitations; assessment assertions may hide Focus as a side
+effect. Do not promise all icons can be controlled independently.
+Private API availability needs runtime checks and explicit failure states.
+An older-macOS backend can be considered after the macOS 27 milestone works.
+
+Name and project
+Proposed name: NookBar. Initial web search found no obvious matching Mac utility;
+this is not exhaustive name clearance. Approved on October 11, 2026.
+Intended distribution: free, open source on GitHub.
+Ice source is GPL-3.0-or-later; preserve upstream license/attribution if reusing it.
+Select the final license explicitly when the project scope is established.
+
+References
+https://github.com/jordanbaird/Ice/tree/0.11.13-dev.2
+https://github.com/jordanbaird/Ice/issues/992
+https://github.com/teddychan/ice-2/blob/main/CHANGELOG.md
+https://github.com/teddychan/ice-2/blob/main/docs/testing/macos27-prototype.md
+
+Full REA observations remain in the original local investigation outputs as
+ice-rea-evidence.json. They are not included in this public-source repository.
