@@ -18,12 +18,25 @@ icons from the same app share one selection.
 6. Click NookBar again, click outside, or press Escape to close the strip. Right-click
    NookBar for settings; **Show All Apps** restores all selected icons.
 
-Selections are saved; hiding starts only when you request it. On macOS 27, the
-native NookBar icon can disappear during hiding. A clickable **N** control replaces
+Selections are saved. **Settings…** includes hide on launch, launch at login,
+click/hover/scroll activation, bar position, and smart, timed, or focused-app
+rehiding. Turn off **Show hidden icons in a separate bar** to reveal icons in the native menu
+bar instead. The default is to hide your saved selection on launch.
+
+The **Shortcuts** tab records shortcuts for showing hidden icons and searching.
+Click a shortcut button, then press a combination containing Command, Control,
+or Option. Escape cancels recording; Delete clears a shortcut. No global shortcut
+is assigned by default. **Search Menu Bar Icons…** searches captured third-party
+icons by app name, icon description, or bundle identifier. Use Up/Down and Return
+to choose a result.
+
+On macOS 27, the native NookBar icon can disappear during hiding. A clickable **N** control replaces
 it in a vacant status-item slot. If no suitable slot is found, NookBar restores all
 apps. Clicking blank menu bar space also requests the strip; this interaction
 still needs physical validation. Changing selections or refreshing the list first shows
-all apps. Quit, sleep, Space changes, permission loss, or changes to running apps release hiding.
+all apps. Quitting or losing permission releases hiding. Sleep/lock releases hiding;
+wake/unlock and Space changes resume a requested hidden state. Changes to running
+apps reconcile the saved selection. These lifecycle paths still need physical checks.
 Some system extras, such as Focus, can also disappear during hiding; Show All
 restores them. Clock and Control Center are not selectable in this preview.
 
@@ -66,7 +79,8 @@ each rebuild. Notarized public downloads are a later release milestone.
 
 ## Validation
 
-`./scripts/check.sh` checks the build, signature, plist, and read-only diagnostics.
+`./scripts/check.sh` checks the build, signature, plist, read-only diagnostics,
+and behavior regressions for rehide decisions, preferences, shortcuts, and search.
 The native hide/restore check must run from the app bundle with its own permission:
 
 ```sh
@@ -79,7 +93,10 @@ Accessibility occurrences return. It also checks other third-party apps remain
 present. It writes a JSON report and exits. System extras may briefly hide too.
 Accessibility observations do not replace visual checks on each display.
 
-See `docs/SMOKE_TEST.md` for lifecycle and UI coverage. Keyboard shortcuts and launch at login are not implemented yet.
+See [the smoke checklist](docs/SMOKE_TEST.md) for lifecycle and UI coverage and
+[the Ice parity ledger](docs/ICE_PARITY.md) for the full remaining scope. Native
+shortcut registration and launch-at-login controls are implemented; cross-app
+shortcut execution and actual login have not yet been verified.
 
 macOS 27 no longer exposes the per-icon windows used by older tools. The proposed
 backend uses a private system framework, whose behavior can change. Multiple

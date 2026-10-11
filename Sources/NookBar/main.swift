@@ -41,7 +41,9 @@ struct Compatibility: Codable {
 
 @MainActor
 private final class ControlPanel: NSPanel {
+    var onEscape: (() -> Void)?
     override var canBecomeKey: Bool { true }
+    override func cancelOperation(_ sender: Any?) { onEscape?() }
 }
 
 @MainActor
@@ -71,6 +73,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var requestedBarAnchor: (NSRect, NSScreen)?
     private var controlPanel: NSPanel?
     private var nativeControlAnchor: (NSRect, NSScreen)?
+    private let preferences = Preferences()
+    private lazy var preferencesWindow = PreferencesWindow(preferences: preferences)
+    private let hotKeys = GlobalHotKeys()
+    private var localBarMonitor: Any?
+    private var localKeyMonitor: Any?
+    private var recordingShortcut = false
+    private var behaviorTimer: Timer?
+    private var visibilityRequested = false
+    private var nativeItemsRevealed = false
+    private var presentationStarted: Date?
+    private var hoverStarted: Date?
+    private var hoverSuppressed = false
+    private var emptyClickWasVisible = false
+    private var temporaryBundle: String?
+    private var cachedIncludesVisible = false
+    private var pointerEnteredPresentation = false
+    private var pointerLeftPresentation: Date?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -93,6 +112,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let manage = NSMenuItem(title: "Choose Apps…", action: #selector(chooseApps), keyEquivalent: "")
         manage.target = self
         menu.addItem(manage)
+        let settings = NSMenuItem(title: "Settings…", action: #selector(showPreferences), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        let search = NSMenuItem(title: "Search Menu Bar Icons…", action: #selector(showIconSearch), keyEquivalent: "")
+        search.target = self
+        menu.addItem(search)
         let restore = NSMenuItem(title: "Show All Apps", action: #selector(showAll), keyEquivalent: "")
         restore.target = self
         menu.addItem(restore)
@@ -107,7 +132,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit NookBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         settingsMenu = menu
-        item.menu = menu
         item.button?.target = self
         item.button?.action = #selector(statusClicked)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -117,48 +141,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return false }
             return window === self.controlPanel || window === self.statusItem?.button?.window
         }
+        hiddenBar.onClose = { [weak self] in
+            self?.presentationStarted = nil
+            self?.hoverSuppressed = true
+        }
         if CommandLine.arguments.contains("--self-test") {
             Task { await self.runSelfTest() }
             return
         }
         promptForAccessibility()
-        emptyBarMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let self, event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return }
-                let point = NSEvent.mouseLocation
-                let top = NSScreen.screens.first?.frame.maxY ?? 0
-                guard NBIsEmptyMenuBarPoint(CGPoint(x: point.x, y: top - point.y)) else { return }
-                if let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) {
-                    let barHeight = screen.frame.maxY - screen.visibleFrame.maxY
-                    self.requestedBarAnchor = (NSRect(x: point.x, y: screen.frame.maxY - max(barHeight, NSStatusBar.system.thickness), width: 1, height: 1), screen)
-                }
-                self.showHiddenBar()
-            }
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp, .rightMouseUp, .scrollWheel]
+        emptyBarMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
+            MainActor.assumeIsolated { self?.handleMenuBarEvent(event) }
         }
+        localBarMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            self?.handleMenuBarEvent(event)
+            return event
+        }
+        hotKeys.onAction = { [weak self] action in
+            if action == .search { self?.showIconSearch() } else { self?.togglePresentation() }
+        }
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, !recordingShortcut, !event.isARepeat else { return event }
+            for action in Preferences.ShortcutAction.allCases {
+                if preferences.shortcut(action)?.matches(keyCode: event.keyCode, flags: event.modifierFlags) == true {
+                    hotKeys.onAction?(action)
+                    return nil
+                }
+            }
+            return event
+        }
+        preferencesWindow.onChange = { [weak self] in self?.preferencesChanged() }
+        preferencesWindow.onRecording = { [weak self] recording in
+            guard let self else { return }
+            recordingShortcut = recording
+            if recording { hotKeys.clear() } else { preferencesChanged() }
+        }
+        preferencesChanged()
         selected.remove(Bundle.main.bundleIdentifier ?? "com.codenest.nookbar")
         refreshApps()
         runningBundles = currentBundles()
         let center = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification,
-                     NSWorkspace.activeSpaceDidChangeNotification] {
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
             workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.restore(message: "Apps restored for sleep or lock.") }
+                MainActor.assumeIsolated { self?.restore(message: "Apps restored for sleep or lock.", clearIntent: false) }
             })
         }
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification,
+                     NSWorkspace.activeSpaceDidChangeNotification] {
+            workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.resumeVisibility() }
+            })
+        }
+        workspaceObservers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let bundle = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            MainActor.assumeIsolated {
+                guard let self, self.preferences.enabled(.autoRehide), self.preferences.rehide == .focusedApp,
+                      let bundle, bundle != Bundle.main.bundleIdentifier else { return }
+                self.rehidePresentation()
+            }
+        })
         monitor = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 let bundles = self.currentBundles()
-                if (self.visibility.active || self.isPending) && (!AXIsProcessTrusted() || bundles != self.runningBundles) {
-                    self.restore(message: "Apps restored because access or running apps changed.")
+                if (self.visibility.active || self.isPending) && !AXIsProcessTrusted() {
+                    self.restore(message: "Apps restored because Accessibility access was removed.")
+                } else if bundles != self.runningBundles && self.visibilityRequested && !self.isPending {
+                    self.cachedIcons = []
+                    if let temporary = self.temporaryBundle, NBMenuIsOpen(temporary) {
+                        self.runningBundles = bundles
+                    } else { self.hideSelectedApps() }
                 }
                 self.runningBundles = bundles
                 if self.visibility.active { self.ensureControl() }
             }
         }
+        behaviorTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkHoverAndRehide() }
+        }
         if selected.isEmpty || CommandLine.arguments.contains("--choose-apps") { chooseApps() }
-        if CommandLine.arguments.contains("--show-bar") {
+        if CommandLine.arguments.contains("--settings") { showPreferences() }
+        else if CommandLine.arguments.contains("--search") { showIconSearch() }
+        else if CommandLine.arguments.contains("--show-bar") {
             Task { try? await Task.sleep(for: .milliseconds(500)); showHiddenBar() }
+        } else if preferences.enabled(.hideOnLaunch), !selected.isEmpty,
+                  !CommandLine.arguments.contains("--choose-apps") {
+            visibilityRequested = true
+            resumeVisibility()
         }
     }
 
@@ -171,14 +241,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        chooseApps()
+        togglePresentation()
         return true
     }
 
     private func currentBundles() -> Set<String> {
-        Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier).filter {
-            $0 != "com.codenest.nookbar.controller"
-        })
+        Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
     }
 
     private func snapshot() -> (counts: [String: Int], error: String?) {
@@ -204,7 +272,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         messageLabel?.stringValue = message
     }
 
-    private func restore(message: String) {
+    private func restore(message: String, clearIntent: Bool = true) {
+        if clearIntent { visibilityRequested = false }
+        nativeItemsRevealed = false
+        presentationStarted = nil
+        temporaryBundle = nil
+        pointerLeftPresentation = nil
         operation += 1
         menuWatch?.invalidate()
         menuWatch = nil
@@ -213,6 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         controlPanel = nil
         cachedIcons = []
         cachedScreenFrame = nil
+        cachedIncludesVisible = false
         visibility.restore()
         isPending = false
         setStatus(message)
@@ -220,14 +294,146 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showAll() { restore(message: "All apps are shown.") }
 
+    @objc private func showPreferences() {
+        hiddenBar.close()
+        preferencesWindow.show()
+    }
+
+    private func preferencesChanged() {
+        if let error = hotKeys.update(preferences) { preferencesWindow.report(error) }
+        else { preferencesWindow.report("Settings saved.") }
+        hoverStarted = nil
+    }
+
+    private func pointerAnchor(_ point: NSPoint) -> (NSRect, NSScreen)? {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) else { return nil }
+        let barHeight = max(screen.frame.maxY - screen.visibleFrame.maxY, NSStatusBar.system.thickness)
+        return (NSRect(x: point.x, y: screen.frame.maxY - barHeight, width: 1, height: 1), screen)
+    }
+
+    private func presentationAnchor() -> (NSRect, NSScreen)? {
+        switch preferences.location {
+        case .dynamic: return requestedBarAnchor ?? barAnchor()
+        case .pointer: return pointerAnchor(NSEvent.mouseLocation) ?? barAnchor()
+        case .icon: return barAnchor()
+        }
+    }
+
+    private func pointerInMenuBar(_ point: NSPoint) -> Bool {
+        // Avoid Accessibility queries while the pointer is far from any menu bar.
+        guard NSScreen.screens.contains(where: { $0.frame.contains(point) && $0.frame.maxY - point.y < 48 }) else { return false }
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        return !NBMenuBarFrameAtPoint(CGPoint(x: point.x, y: top - point.y)).isNull
+    }
+
+    private func isEmptyMenuPoint(_ point: NSPoint) -> Bool {
+        guard pointerInMenuBar(point) else { return false }
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        return NBIsEmptyMenuBarPoint(CGPoint(x: point.x, y: top - point.y))
+    }
+
+    private func togglePresentation() {
+        hoverSuppressed = true
+        if hiddenBar.isVisible || nativeItemsRevealed { rehidePresentation(); return }
+        if preferences.enabled(.useBar) { showHiddenBar() }
+        else {
+            guard !selected.isEmpty else { chooseApps(); return }
+            guard AXIsProcessTrusted() else { requestAccessibility(); return }
+            visibilityRequested = true
+            restore(message: "Selected apps are shown temporarily.", clearIntent: false)
+            nativeItemsRevealed = true
+            presentationStarted = Date()
+            pointerEnteredPresentation = pointerInMenuBar(NSEvent.mouseLocation)
+        }
+    }
+
+    private func dismissTemporaryMenu() -> Bool {
+        guard let bundle = temporaryBundle else { return true }
+        guard NBCancelMenu(bundle) else { setStatus("Close the open menu before opening another icon."); return false }
+        menuWatch?.invalidate(); menuWatch = nil
+        temporaryBundle = nil
+        return true
+    }
+
+    private func rehidePresentation() {
+        guard !isPending, temporaryBundle == nil else { return }
+        if nativeItemsRevealed && selected.contains(where: { NBMenuIsOpen($0) }) { return }
+        presentationStarted = nil
+        hiddenBar.close()
+        if nativeItemsRevealed { hideSelectedApps() }
+    }
+
+    private func handleMenuBarEvent(_ event: NSEvent) {
+        let point = NSEvent.mouseLocation
+        if event.type == .leftMouseDown {
+            emptyClickWasVisible = hiddenBar.isVisible || nativeItemsRevealed
+            if nativeItemsRevealed && preferences.enabled(.autoRehide) && preferences.rehide == .smart && !pointerInMenuBar(point) {
+                rehidePresentation()
+            }
+            return
+        }
+        guard !isPending else { return }
+        if event.type == .scrollWheel {
+            guard preferences.enabled(.showOnScroll), pointerInMenuBar(point) else { return }
+            let delta = (event.scrollingDeltaX + event.scrollingDeltaY) / 2
+            if delta > 5 && !hiddenBar.isVisible && !nativeItemsRevealed {
+                requestedBarAnchor = pointerAnchor(point); togglePresentation()
+            } else if delta < -5 { rehidePresentation() }
+            return
+        }
+        guard isEmptyMenuPoint(point) else { return }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if (event.type == .rightMouseUp || (event.type == .leftMouseUp && modifiers == .control)), preferences.enabled(.secondaryMenu) {
+            hiddenBar.close()
+            settingsMenu?.popUp(positioning: nil, at: point, in: nil)
+        } else if event.type == .leftMouseUp && modifiers.isEmpty && preferences.enabled(.showOnClick) {
+            if emptyClickWasVisible { rehidePresentation() }
+            else { requestedBarAnchor = pointerAnchor(point); togglePresentation() }
+        }
+    }
+
+    private func checkHoverAndRehide() {
+        guard !isPending, temporaryBundle == nil else { return }
+        let point = NSEvent.mouseLocation
+        let inMenuBar = pointerInMenuBar(point)
+        let inside = inMenuBar || hiddenBar.contains(point)
+        if !inside { hoverSuppressed = false }
+        if hiddenBar.isVisible || nativeItemsRevealed {
+            if inside { pointerEnteredPresentation = true; pointerLeftPresentation = nil }
+            else if pointerLeftPresentation == nil { pointerLeftPresentation = Date() }
+            guard preferences.enabled(.autoRehide), !hiddenBar.isSearching, let started = presentationStarted else { return }
+            let since = preferences.rehide == .smart ? (pointerLeftPresentation ?? Date()) : started
+            if preferences.shouldRehide(elapsed: Date().timeIntervalSince(since), inside: inside,
+                                        pointerEntered: pointerEnteredPresentation) { rehidePresentation() }
+            return
+        }
+        guard preferences.enabled(.showOnHover), visibilityRequested, !hoverSuppressed,
+              NSEvent.pressedMouseButtons == 0, inMenuBar, isEmptyMenuPoint(point) else { hoverStarted = nil; return }
+        if hoverStarted == nil { hoverStarted = Date() }
+        guard let started = hoverStarted, Date().timeIntervalSince(started) >= preferences.hoverDelay else { return }
+        hoverStarted = nil
+        requestedBarAnchor = pointerAnchor(point)
+        togglePresentation()
+    }
+
+    private func resumeVisibility() {
+        guard visibilityRequested else { return }
+        restore(message: "Refreshing menu bar visibility…", clearIntent: false)
+        let generation = operation
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            guard operation == generation, visibilityRequested, AXIsProcessTrusted() else { return }
+            hideSelectedApps()
+        }
+    }
+
     @objc private func statusClicked(_ sender: NSButton) {
         if NSApp.currentEvent?.type == .rightMouseUp || NSApp.currentEvent?.modifierFlags.contains(.control) == true {
             hiddenBar.close()
             if let menu = settingsMenu, let event = NSApp.currentEvent {
                 NSMenu.popUpContextMenu(menu, with: event, for: sender)
             }
-        } else if hiddenBar.isVisible { hiddenBar.close() }
-        else { showHiddenBar() }
+        } else { togglePresentation() }
     }
 
     private func barAnchor() -> (NSRect, NSScreen)? {
@@ -258,6 +464,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let frame = NSRect(x: slot.midX - 12, y: top - slot.midY - 12, width: 24, height: 24)
         if let controlPanel { controlPanel.setFrame(frame, display: true); return }
         let panel = ControlPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.onEscape = { [weak self] in
+            guard let self else { return }
+            if temporaryBundle != nil, dismissTemporaryMenu() { hideSelectedApps() }
+            else { rehidePresentation() }
+        }
         panel.title = "NookBar Control"
         panel.hidesOnDeactivate = false
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
@@ -278,10 +489,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func showHiddenBar() {
-        guard !isPending, let (anchor, screen) = requestedBarAnchor ?? barAnchor() else { return }
+        presentBar(searching: false)
+    }
+
+    @objc private func showIconSearch() { presentBar(searching: true) }
+
+    private func presentBar(searching: Bool) {
+        if temporaryBundle != nil {
+            guard !isPending, dismissTemporaryMenu() else { return }
+            hideSelectedApps(then: { [weak self] in self?.presentBar(searching: searching) })
+            return
+        }
+        guard !isPending, let (anchor, screen) = presentationAnchor() else { return }
         requestedBarAnchor = nil
         guard AXIsProcessTrusted() else { requestAccessibility(); return }
-        guard !selected.isEmpty else { chooseApps(); return }
+        guard searching || !selected.isEmpty else { chooseApps(); return }
         guard CGPreflightScreenCaptureAccess() else {
             let alert = NSAlert()
             alert.messageText = "Allow NookBar to read menu bar icons"
@@ -294,28 +516,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
-        if visibility.active && !cachedIcons.isEmpty && cachedScreenFrame == screen.frame {
-            hiddenBar.show(icons: cachedIcons, anchor: anchor, screen: screen)
+        visibilityRequested = !selected.isEmpty
+        if visibility.active && !cachedIcons.isEmpty && cachedScreenFrame == screen.frame && (!searching || cachedIncludesVisible) {
+            let icons = searching ? cachedIcons : cachedIcons.filter { selected.contains($0.bundle) }
+            presentationStarted = Date()
+            pointerEnteredPresentation = pointerInMenuBar(NSEvent.mouseLocation)
+            pointerLeftPresentation = nil
+            hiddenBar.show(icons: icons, anchor: anchor, screen: screen, searching: searching)
             return
         }
         // Restore for one fresh capture, then hide again before displaying the strip.
-        restore(message: "Loading hidden icons…")
+        restore(message: "Loading menu bar icons…", clearIntent: false)
         let generation = operation
         isPending = true
         let targets = selected.intersection(currentBundles())
+        let captureTargets = searching ? Set(currentBundles().filter { !$0.hasPrefix("com.apple.") && $0 != Bundle.main.bundleIdentifier }) : targets
         Task {
             do {
                 try await Task.sleep(for: .milliseconds(250))
-                let icons = try await HiddenBar.capture(bundles: targets, screen: screen)
+                let icons = try await HiddenBar.capture(bundles: captureTargets, screen: screen)
                 guard generation == operation else { return }
-                let error = await activate(Array(targets))
+                let error = targets.isEmpty ? nil : await activate(Array(targets))
                 guard generation == operation else { return }
                 isPending = false
                 if let error { restore(message: error); return }
                 cachedIcons = icons
                 cachedScreenFrame = screen.frame
+                cachedIncludesVisible = searching
+                presentationStarted = Date()
+                pointerEnteredPresentation = pointerInMenuBar(NSEvent.mouseLocation)
+                pointerLeftPresentation = nil
                 setStatus("Click NookBar to open hidden icons. Right-click for settings.")
-                hiddenBar.show(icons: icons, anchor: anchor, screen: screen)
+                hiddenBar.show(icons: icons, anchor: anchor, screen: screen, searching: searching)
                 try? await Task.sleep(for: .seconds(1))
                 if generation == operation { ensureControl() }
             } catch {
@@ -331,6 +563,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let (_, screen) = barAnchor() else { showAll(); return }
         operation += 1
         let generation = operation
+        presentationStarted = nil
+        temporaryBundle = icon.bundle
         menuWatch?.invalidate()
         isPending = true
         let remaining = selected.intersection(currentBundles()).subtracting([icon.bundle])
@@ -353,8 +587,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     // Give a menu time to appear; keep the original item visible while it is open.
                     guard Date().timeIntervalSince(started) > 1, !NBMenuIsOpen(icon.bundle) else { return }
                     self.menuWatch?.invalidate(); self.menuWatch = nil
-                    self.visibility.restore()
-                    self.toggleVisibility()
+                    self.temporaryBundle = nil
+                    self.hideSelectedApps()
                 }
             }
         }
@@ -372,10 +606,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleVisibility() {
         if visibility.active || isPending { showAll(); return }
+        hideSelectedApps()
+    }
+
+    private func hideSelectedApps(then completion: (() -> Void)? = nil) {
+        guard !isPending else { return }
         guard AXIsProcessTrusted() else { requestAccessibility(); return }
         let own = Bundle.main.bundleIdentifier ?? "com.codenest.nookbar"
         let targets = selected.intersection(currentBundles()).filter { $0 != own && !$0.hasPrefix("com.apple.") }
-        guard !targets.isEmpty else { chooseApps(); return }
+        guard !targets.isEmpty else { showAll(); completion?(); return }
+        visibilityRequested = true
+        nativeItemsRevealed = false
+        presentationStarted = nil
+        temporaryBundle = nil
+        menuWatch?.invalidate(); menuWatch = nil
+        hiddenBar.close(notify: false)
         operation += 1
         let generation = operation
         runningBundles = currentBundles()
@@ -387,6 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             isPending = false
             if let error { restore(message: error); return }
             setStatus("Selected apps are hidden. Click NookBar to open their icons; right-click for settings.")
+            completion?()
             try? await Task.sleep(for: .seconds(1))
             if generation == operation { ensureControl() }
         }
@@ -512,7 +758,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor?.invalidate()
+        behaviorTimer?.invalidate()
+        hotKeys.stop()
         if let emptyBarMonitor { NSEvent.removeMonitor(emptyBarMonitor) }
+        if let localBarMonitor { NSEvent.removeMonitor(localBarMonitor) }
+        if let localKeyMonitor { NSEvent.removeMonitor(localKeyMonitor) }
         menuWatch?.invalidate()
         hiddenBar.close(notify: false)
         controlPanel?.orderOut(nil)
@@ -657,7 +907,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 }
 
-if CommandLine.arguments.contains("--snapshot") {
+if CommandLine.arguments.contains("--check-behavior") {
+    BehaviorChecks.run()
+} else if CommandLine.arguments.contains("--snapshot") {
     do {
         let data = try JSONSerialization.data(withJSONObject: NBMenuBarSnapshot(), options: [.prettyPrinted, .sortedKeys])
         print(String(decoding: data, as: UTF8.self))

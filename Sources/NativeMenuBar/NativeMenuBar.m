@@ -46,7 +46,9 @@ static void CollectEntries(AXUIElementRef element, CGRect screen, CGRect region,
             NSString *key = [NSString stringWithFormat:@"%@:%@", app.bundleIdentifier, NSStringFromRect(frame)];
             NBMenuBarEntry *entry = [NBMenuBarEntry new];
             entry.bundle = app.bundleIdentifier; entry.frame = frame; entry.element = (__bridge id)element;
-            NSString *title = Attribute(element, kAXDescriptionAttribute) ?: Attribute(element, kAXTitleAttribute);
+            NSString *title = Attribute(element, kAXDescriptionAttribute);
+            if (!title.length) title = Attribute(element, kAXTitleAttribute);
+            if (!title.length) title = Attribute(element, kAXHelpAttribute);
             entry.label = title.length ? title : (app.localizedName ?: entry.bundle);
             entries[key] = entry;
         }
@@ -91,42 +93,80 @@ BOOL NBPressMenuBarEntry(NSString *bundle, NSUInteger index, CGRect screenFrame)
     return AXUIElementPerformAction((__bridge AXUIElementRef)entry.element, kAXPressAction) == kAXErrorSuccess;
 }
 
-static BOOL HasMenu(AXUIElementRef element, NSUInteger depth, NSUInteger *budget) {
-    if (depth > 5 || !*budget) return NO;
-    (*budget)--;
-    if ([Attribute(element, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXMenuRole]) {
-        CGRect frame = ElementFrame(element);
-        if (frame.size.width > 0 && frame.size.height > 0) return YES;
-    }
-    id children = Attribute(element, kAXChildrenAttribute);
-    if ([children isKindOfClass:NSArray.class]) for (id child in children)
-        if (HasMenu((__bridge AXUIElementRef)child, depth + 1, budget)) return YES;
-    return NO;
-}
-
 BOOL NBMenuIsOpen(NSString *bundle) {
     NSRunningApplication *app = [NSRunningApplication runningApplicationsWithBundleIdentifier:bundle].firstObject;
     if (!app) return NO;
+    // Closed NSMenus can retain nonzero AX frames. Use WindowServer's actual
+    // on-screen popup windows, rather than treating those cached frames as open.
+    NSArray *windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+    if (!windows) return YES; // Preserve the item while visibility is unknown.
+    for (NSDictionary *window in windows) {
+        if ([window[(__bridge NSString *)kCGWindowOwnerPID] intValue] != app.processIdentifier) continue;
+        NSInteger layer = [window[(__bridge NSString *)kCGWindowLayer] integerValue];
+        if (layer == NSPopUpMenuWindowLevel || layer == NSModalPanelWindowLevel) return YES;
+    }
+    return NO;
+}
+
+static BOOL CancelMenu(AXUIElementRef element, NSArray<NSValue *> *frames, NSUInteger depth, NSUInteger *budget) {
+    if (depth > 5 || !*budget) return NO;
+    (*budget)--;
+    if ([Attribute(element, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXMenuRole]) {
+        CGRect rect = ElementFrame(element);
+        for (NSValue *frame in frames) {
+            if (CGRectIntersectsRect(rect, frame.rectValue) && AXUIElementPerformAction(element, kAXCancelAction) == kAXErrorSuccess) return YES;
+        }
+    }
+    id children = Attribute(element, kAXChildrenAttribute);
+    if ([children isKindOfClass:NSArray.class]) for (id child in children)
+        if (CancelMenu((__bridge AXUIElementRef)child, frames, depth + 1, budget)) return YES;
+    return NO;
+}
+
+BOOL NBCancelMenu(NSString *bundle) {
+    NSRunningApplication *app = [NSRunningApplication runningApplicationsWithBundleIdentifier:bundle].firstObject;
+    if (!app) return YES;
+    NSArray *windows = CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+    if (!windows) return NO;
+    NSMutableArray *frames = [NSMutableArray array];
+    for (NSDictionary *window in windows) {
+        if ([window[(__bridge NSString *)kCGWindowOwnerPID] intValue] != app.processIdentifier ||
+            [window[(__bridge NSString *)kCGWindowLayer] integerValue] != NSPopUpMenuWindowLevel) continue;
+        CGRect frame;
+        if (CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)window[(__bridge NSString *)kCGWindowBounds], &frame))
+            [frames addObject:[NSValue valueWithRect:frame]];
+    }
+    if (!frames.count) return !NBMenuIsOpen(bundle);
     AXUIElementRef root = AXUIElementCreateApplication(app.processIdentifier);
     AXUIElementSetMessagingTimeout(root, 0.1);
-    NSUInteger budget = 256; BOOL result = HasMenu(root, 0, &budget); CFRelease(root);
+    NSUInteger budget = 512;
+    BOOL cancelled = CancelMenu(root, frames, 0, &budget);
+    CFRelease(root);
+    return cancelled;
+}
+
+CGRect NBMenuBarFrameAtPoint(CGPoint point) {
+    if (!AXIsProcessTrusted()) return CGRectNull;
+    NSRunningApplication *agent = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.MenuBarAgent"].firstObject;
+    if (!agent) return CGRectNull;
+    AXUIElementRef root = AXUIElementCreateApplication(agent.processIdentifier);
+    AXUIElementSetMessagingTimeout(root, 0.1);
+    id windows = Attribute(root, kAXChildrenAttribute);
+    CGRect result = CGRectNull;
+    if ([windows isKindOfClass:NSArray.class]) for (id window in windows) {
+        AXUIElementRef win = (__bridge AXUIElementRef)window;
+        if ([Attribute(win, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXWindowRole] &&
+            CGRectContainsPoint(ElementFrame(win), point)) { result = ElementFrame(win); break; }
+    }
+    CFRelease(root);
     return result;
 }
 
 BOOL NBIsEmptyMenuBarPoint(CGPoint point) {
-    if (!AXIsProcessTrusted()) return NO;
+    if (CGRectIsNull(NBMenuBarFrameAtPoint(point))) return NO;
     NSRunningApplication *agent = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.MenuBarAgent"].firstObject;
     if (!agent) return NO;
-    AXUIElementRef root = AXUIElementCreateApplication(agent.processIdentifier);
-    id windows = Attribute(root, kAXChildrenAttribute);
-    BOOL inBar = NO;
-    if ([windows isKindOfClass:NSArray.class]) for (id window in windows) {
-        AXUIElementRef win = (__bridge AXUIElementRef)window;
-        if ([Attribute(win, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXWindowRole] &&
-            CGRectContainsPoint(ElementFrame(win), point)) { inBar = YES; break; }
-    }
-    CFRelease(root);
-    if (!inBar) return NO;
     AXUIElementRef system = AXUIElementCreateSystemWide(), hit = NULL;
     AXError error = AXUIElementCopyElementAtPosition(system, point.x, point.y, &hit);
     CFRelease(system);

@@ -7,14 +7,19 @@ the two can have different Accessibility authorization.
 - Discovery: app picker lists actual third-party menu bar apps, excludes NookBar/system services.
 - Selection: check an app, hide it, verify its actual icon disappears and other apps remain.
 - Reveal: Show All returns the selected icon; repeat several times.
-- Persistence: quit/relaunch preserves selection and starts with apps visible.
+- Persistence: quit/relaunch preserves selection and respects hide-on-launch.
 - Quit: quit while hiding and verify every selected icon returns.
-- App lifecycle: launch/quit another app while hiding; the bar returns to visible.
-- Sleep/lock: release hiding before sleep/lock; verify visibility after wake/unlock.
+- App lifecycle: launch/quit another app while hiding; selected apps stay hidden and new selectable apps are discovered.
+- Sleep/lock: release hiding before sleep/lock; verify the requested hidden state resumes after wake/unlock.
 - Permission: revoke access while hiding; all apps return, and hiding is unavailable.
 - Failure: missing framework, callback failure, timeout, or cancellation restores visibility.
 - Displays/Spaces: validate physical icons on each display, including switching Spaces.
 - Unexpected exit: terminate the app process while hiding; verify system releases its assertion.
+- Settings: change activation, location, and rehide settings; relaunch and verify persistence.
+- Shortcuts: record, clear, and test from another app; verify conflict messages and no activation while recording.
+- Search: filter by app and icon name; use arrows, Return, and Escape; verify no-match state and separate items from one app.
+- Native reveal: disable the hidden bar, reveal selected icons, then verify each rehide strategy while an original menu is open.
+- Login: enable launch at login, verify the reported registration state, and test an actual login.
 
 Record observed results separately from implemented cleanup paths. Never count a
 successful activation callback alone as proof that physical icons hid or returned.
@@ -52,3 +57,27 @@ app lifecycle changes, and unexpected exit remain unvalidated.
   release-ready or treat NSPanel.isVisible as physical per-display proof.
 - `--test-control` makes the fallback panel key for targeted CUA inspection. Normal
   launches leave keyboard focus with the user until they open the strip.
+
+## Settings and search batch, 2026-10-11
+
+- Signed build, bundle signature, plist, diagnostics, and behavior regressions pass.
+  Behavior checks cover smart/timed rehide decisions, disabled/focused-app modes,
+  bounded preference values, shortcut persistence and modifiers, and search matching.
+- The installed signed app's fresh self-test passed discovery, icon capture,
+  hiding/restoration, preservation of other apps, repeated toggles, and immediate
+  cancellation. NookBar's native icon remained available when the test hid TaskWise.
+  This is AX evidence for that run, not a guarantee across all selections or displays.
+- CUA inspected the native General and Shortcuts tabs. Shortcut recording saved
+  Option–Command–N and Option–Command–F; native registration reported no conflict.
+  Scoped automation key input is not evidence of system-wide shortcut execution.
+- Search displayed eleven captured third-party icons. Filtering by app name found
+  Amphetamine behind its symbol-only icon, and Stats produced three separate results.
+  A screenshot verified keyboard selection and top-aligned filtered rows after fixes.
+- Independent AX snapshots confirmed the six current selected apps were absent
+  while NookBar, TaskWise, Amphetamine, and Stats remained present at that instant.
+- Attempts to activate Jump Desktop and BetterDisplay through CUA lost access as
+  the strip closed. Later snapshots showed hiding active, but no enduring original
+  menu was captured. Menu activation and close/re-hiding remain unverified for this batch.
+- Hover/scroll, native reveal, launch at login, sleep/lock/Spaces, each display, and
+  cross-app shortcuts remain pending physical validation. See `ICE_PARITY.md` for
+  unimplemented features; this batch does not establish full Ice parity.

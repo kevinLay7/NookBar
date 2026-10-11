@@ -13,7 +13,9 @@ NSDictionary *NBMenuBarSnapshot(void);
 NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame);
 BOOL NBPressMenuBarEntry(NSString *bundle, NSUInteger index, CGRect screenFrame);
 BOOL NBMenuIsOpen(NSString *bundle);
+BOOL NBCancelMenu(NSString *bundle);
 BOOL NBIsEmptyMenuBarPoint(CGPoint point);
+CGRect NBMenuBarFrameAtPoint(CGPoint point);
 CGRect NBEmptyStatusSlot(CGRect screenFrame, CGRect expectedFrame);
 
 @interface NBVisibilityController : NSObject

@@ -13,3 +13,4 @@ for field in ("accessibilityGranted", "frameworkAvailable", "configurationAvaila
 print(json.dumps(report, indent=2))
 print("Diagnostics smoke check passed; hiding behavior remains untested.")
 '
+build/NookBar.app/Contents/MacOS/NookBar --check-behavior
