@@ -1072,30 +1072,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             report["initialOverflow"] = NBMenuBarOverflowState(HiddenBar.captureFrame(for: screen))
             let icons = try await HiddenBar.capture(entries: entries, screen: screen)
             report["initialCaptureCount"] = icons.count
-            hiddenBar.show(icons: icons, anchor: NSRect(x: screen.frame.midX, y: screen.frame.maxY, width: 1, height: 1), screen: screen)
-            var previous = icons.first?.image.tiffRepresentation
-            var refreshed = true
+            guard let (anchor, _) = pointerAnchor(NSPoint(x: screen.frame.midX, y: screen.frame.maxY - 1)) else { throw HiddenBar.BarError.noIcons }
+            hiddenBar.show(icons: icons, anchor: anchor, screen: screen)
+            func pixels(_ image: NSImage) -> Data? {
+                guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                      let context = CGContext(data: nil, width: cg.width, height: cg.height, bitsPerComponent: 8,
+                                              bytesPerRow: cg.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+                      let bytes = context.data else { return nil }
+                // Render each crop independently; a cropped CGImage can retain
+                // its composite screenshot's provider, which is not this icon.
+                context.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+                return Data(bytes: bytes, count: cg.width * cg.height * 4)
+            }
+            var previous = icons
+            let expectedCount = spacingProbeItems.isEmpty ? 1 : spacingProbeItems.count
+            var refreshed = icons.count == expectedCount
             for tick in 2...3 {
                 button.image = NSImage(systemSymbolName: "\(tick).circle", accessibilityDescription: "NookBar refresh check")
                 button.image?.isTemplate = true
                 button.toolTip = "Tick \(tick)"
                 for probe in spacingProbeItems {
-                    probe.button?.image = NSImage(systemSymbolName: "\(tick).circle", accessibilityDescription: "NookBar spacing probe S\(probe.button?.tag ?? 0)")
+                    probe.button?.image = NSImage(systemSymbolName: "\(tick + 47).circle", accessibilityDescription: "NookBar spacing probe S\(probe.button?.tag ?? 0)")
                     probe.button?.image?.isTemplate = true
                 }
                 try await Task.sleep(for: .milliseconds(250))
-                let currentEntries = NBMenuBarEntries(HiddenBar.captureFrame(for: screen)).filter {
+                if CommandLine.arguments.contains("--refresh-hold") {
+                    report["stage"] = "waitingBeforeTick\(tick)"
+                    if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
+                       let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                        try? data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), options: .atomic)
+                    }
+                    try await Task.sleep(for: .seconds(15))
+                }
+                let discovered = NBMenuBarEntries(HiddenBar.captureFrame(for: screen))
+                let currentEntries = discovered.filter {
                     $0.bundle == own && (spacingProbeItems.isEmpty || $0.label.hasPrefix("NookBar spacing probe S"))
                 }
                 report["tick\(tick)DiscoveredCount"] = currentEntries.count
                 report["tick\(tick)OverflowBeforeCapture"] = NBMenuBarOverflowState(HiddenBar.captureFrame(for: screen))
                 hiddenBar.update(icons: try await HiddenBar.capture(entries: currentEntries, screen: screen))
-                let current = hiddenBar.icons.first?.image.tiffRepresentation
-                let changed = current != nil && current != previous
-                report["tick\(tick)PixelsChanged"] = changed
+                let current = hiddenBar.icons
+                let changedCount = current.filter { icon in
+                    guard let entry = icon.entry,
+                          let old = previous.first(where: { $0.entry.map { NBSameMenuBarEntryDescriptor($0, entry) } ?? false }),
+                          let newPixels = pixels(icon.image), let oldPixels = pixels(old.image) else { return false }
+                    return newPixels != oldPixels
+                }.count
+                report["tick\(tick)PixelsChangedCount"] = changedCount
                 report["tick\(tick)PanelVisible"] = hiddenBar.isVisible
                 report["tick\(tick)IconCount"] = hiddenBar.icons.count
-                refreshed = refreshed && changed && hiddenBar.isVisible
+                report["tick\(tick)RestoredOverflow"] = NBMenuBarOverflowState(HiddenBar.captureFrame(for: screen))
+                refreshed = refreshed && changedCount == expectedCount && current.count == expectedCount && hiddenBar.isVisible
+                if !spacingProbeItems.isEmpty { refreshed = refreshed && NBMenuBarOverflowState(HiddenBar.captureFrame(for: screen)) == 0 }
                 previous = current
             }
             report["passed"] = refreshed

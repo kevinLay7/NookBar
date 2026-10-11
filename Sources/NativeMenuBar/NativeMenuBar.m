@@ -49,8 +49,15 @@ static CGRect ElementFrame(AXUIElementRef element) {
 }
 
 static void CollectEntries(AXUIElementRef element, CGRect screen, CGRect region, NSUInteger depth,
-                           NSMutableArray *entries, NSUInteger *budget) {
+                           NSMutableArray *entries, NSUInteger *budget, CFMutableDictionaryRef visited) {
     if (depth > 6 || !*budget) return;
+    // MenuBarAgent repeats an owning app's AX subtree in status-item groups and
+    // Space copies. Keep the group region in the key: a leaf rejected in one
+    // region can still belong to another. Revisit only from a shallower depth.
+    NSArray *context = @[(__bridge id)element, [NSValue valueWithRect:NSRectFromCGRect(region)]];
+    NSNumber *previousDepth = (__bridge NSNumber *)CFDictionaryGetValue(visited, (__bridge CFArrayRef)context);
+    if (previousDepth && previousDepth.unsignedIntegerValue <= depth) return;
+    CFDictionarySetValue(visited, (__bridge CFArrayRef)context, (__bridge CFNumberRef)@(depth));
     (*budget)--;
     if ([Attribute(element, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXMenuBarItemRole]) {
         CGRect frame = ElementFrame(element);
@@ -91,7 +98,7 @@ static void CollectEntries(AXUIElementRef element, CGRect screen, CGRect region,
     }
     id children = Attribute(element, kAXChildrenAttribute);
     if ([children isKindOfClass:NSArray.class])
-        for (id child in children) CollectEntries((__bridge AXUIElementRef)child, screen, region, depth + 1, entries, budget);
+        for (id child in children) CollectEntries((__bridge AXUIElementRef)child, screen, region, depth + 1, entries, budget, visited);
 }
 
 NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame) {
@@ -101,6 +108,7 @@ NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame) {
     AXUIElementRef root = AXUIElementCreateApplication(agent.processIdentifier);
     AXUIElementSetMessagingTimeout(root, 0.15);
     NSMutableArray *entries = [NSMutableArray array]; NSUInteger budget = 4096;
+    CFMutableDictionaryRef visited = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     id windows = Attribute(root, kAXChildrenAttribute);
     if ([windows isKindOfClass:NSArray.class]) for (id window in windows) {
         AXUIElementRef win = (__bridge AXUIElementRef)window;
@@ -108,10 +116,10 @@ NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame) {
         id groups = Attribute(win, kAXChildrenAttribute);
         if ([groups isKindOfClass:NSArray.class]) for (id group in groups) {
             AXUIElementRef element = (__bridge AXUIElementRef)group;
-            CollectEntries(element, screenFrame, ElementFrame(element), 0, entries, &budget);
+            CollectEntries(element, screenFrame, ElementFrame(element), 0, entries, &budget, visited);
         }
     }
-    CFRelease(root);
+    CFRelease(visited); CFRelease(root);
     if (!budget) return @[];
     // SwiftUI system extras have separate AX identities in inactive Space copies.
     // An exposed copy identifies the actual pixels at this frame; retain unknown
@@ -392,7 +400,9 @@ CGRect NBEmptyStatusSlot(CGRect screenFrame, CGRect expectedFrame) {
             CGRect rect = ElementFrame(element);
             if (rect.size.width < 20 || rect.size.width > 50 || !CGRectContainsRect(screenFrame, rect)) continue;
             NSMutableArray *items = [NSMutableArray array]; NSUInteger budget = 256;
-            CollectEntries(element, screenFrame, rect, 0, items, &budget);
+            CFMutableDictionaryRef visited = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+            CollectEntries(element, screenFrame, rect, 0, items, &budget, visited);
+            CFRelease(visited);
             if (!budget || items.count) continue;
             CGFloat delta = fabs(CGRectGetMidX(rect) - CGRectGetMidX(expectedFrame));
             if (delta < distance) { closest = rect; distance = delta; }
