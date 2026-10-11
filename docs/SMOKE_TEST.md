@@ -20,6 +20,7 @@ the two can have different Accessibility authorization.
 - Search: filter by app and icon name; use arrows, Return, and Escape; verify no-match state and separate items from one app.
 - Native reveal: disable the hidden bar, reveal selected icons, then verify each rehide strategy while an original menu is open.
 - Login: enable launch at login, verify the reported registration state, and test an actual login.
+- Sections: move an app to Always Hidden; verify the normal strip excludes it and the separate strip includes it; relaunch and check persistence. Restore the original test selection afterward.
 
 Record observed results separately from implemented cleanup paths. Never count a
 successful activation callback alone as proof that physical icons hid or returned.
@@ -81,3 +82,23 @@ app lifecycle changes, and unexpected exit remain unvalidated.
 - Hover/scroll, native reveal, launch at login, sleep/lock/Spaces, each display, and
   cross-app shortcuts remain pending physical validation. See `ICE_PARITY.md` for
   unimplemented features; this batch does not establish full Ice parity.
+
+## Three-section batch, 2026-10-11
+
+- CUA moved Chrome from Hidden to Always Hidden. UserDefaults saved it in only the
+  always-hidden list; the normal strip showed the other five selected apps.
+- The separate Always Hidden strip showed Chrome's captured Gemini icon alone,
+  verified through both AX and a screenshot. An installed-app relaunch preserved
+  its section assignment.
+- With the separate bar disabled through Settings, the app picker's Hidden Icons
+  action revealed the normal five apps while Chrome remained absent from an
+  independent AX snapshot. Always-Hidden Icons revealed Chrome as well. Toggling
+  Always Hidden off hid only Chrome; toggling the normal section off hid all six.
+- Restored Chrome to Hidden and enabled the separate bar again. Original selected
+  app memberships were preserved; no new shortcuts or login registration were set.
+- Four shortcut recorders are visible: hidden, search, always-hidden, and bar mode.
+  Actual cross-app execution remains pending human input, as in the previous batch.
+- Regression checks cover legacy selection migration, disjoint membership,
+  persistence, system/control exclusions, and Select All/Clear Selection behavior.
+  Physical Option-click, automatic rehide, independent icons from one app, and
+  multi-display behavior remain unverified.

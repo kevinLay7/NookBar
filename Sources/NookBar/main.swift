@@ -51,7 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var accessibilityItem: NSMenuItem?
     private let visibility = NBVisibilityController()
-    private var selected = Set(UserDefaults.standard.stringArray(forKey: "HiddenApps") ?? [])
+    private let sections = AppSections()
+    private var selected: Set<String> { sections.tucked }
+    private var presentedSection: AppSections.Section = .hidden
     private var apps: [(bundle: String, name: String)] = []
     private var appWindow: NSWindow?
     private var appList: NSStackView?
@@ -118,6 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let search = NSMenuItem(title: "Search Menu Bar Icons…", action: #selector(showIconSearch), keyEquivalent: "")
         search.target = self
         menu.addItem(search)
+        let always = NSMenuItem(title: "Always-Hidden Icons…", action: #selector(showAlwaysHidden), keyEquivalent: "")
+        always.target = self
+        menu.addItem(always)
         let restore = NSMenuItem(title: "Show All Apps", action: #selector(showAll), keyEquivalent: "")
         restore.target = self
         menu.addItem(restore)
@@ -159,7 +164,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return event
         }
         hotKeys.onAction = { [weak self] action in
-            if action == .search { self?.showIconSearch() } else { self?.togglePresentation() }
+            guard let self else { return }
+            switch action {
+            case .search: showIconSearch()
+            case .toggle: togglePresentation()
+            case .alwaysHidden: togglePresentation(section: .alwaysHidden)
+            case .barMode:
+                preferences.defaults.set(!preferences.enabled(.useBar), forKey: "useBar")
+                rehidePresentation()
+                preferencesChanged()
+            }
         }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, !recordingShortcut, !event.isARepeat else { return event }
@@ -178,7 +192,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if recording { hotKeys.clear() } else { preferencesChanged() }
         }
         preferencesChanged()
-        selected.remove(Bundle.main.bundleIdentifier ?? "com.codenest.nookbar")
         refreshApps()
         runningBundles = currentBundles()
         let center = NSWorkspace.shared.notificationCenter
@@ -211,6 +224,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.cachedIcons = []
                     if let temporary = self.temporaryBundle, NBMenuIsOpen(temporary) {
                         self.runningBundles = bundles
+                    } else if self.nativeItemsRevealed {
+                        self.revealNativeSection(self.presentedSection)
                     } else { self.hideSelectedApps() }
                 }
                 self.runningBundles = bundles
@@ -295,6 +310,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAll() { restore(message: "All apps are shown.") }
 
     @objc private func showPreferences() {
+        let hadTemporaryMenu = temporaryBundle != nil
+        guard !isPending, dismissTemporaryMenu() else { return }
+        if hadTemporaryMenu && visibilityRequested { hideSelectedApps() }
         hiddenBar.close()
         preferencesWindow.show()
     }
@@ -332,18 +350,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return NBIsEmptyMenuBarPoint(CGPoint(x: point.x, y: top - point.y))
     }
 
-    private func togglePresentation() {
+    private func togglePresentation(section: AppSections.Section = .hidden) {
+        guard !isPending else { return }
         hoverSuppressed = true
-        if hiddenBar.isVisible || nativeItemsRevealed { rehidePresentation(); return }
-        if preferences.enabled(.useBar) { showHiddenBar() }
-        else {
-            guard !selected.isEmpty else { chooseApps(); return }
-            guard AXIsProcessTrusted() else { requestAccessibility(); return }
-            visibilityRequested = true
-            restore(message: "Selected apps are shown temporarily.", clearIntent: false)
+        if preferences.enabled(.useBar) {
+            if hiddenBar.isVisible && !hiddenBar.isSearching && presentedSection == section { rehidePresentation(); return }
+            presentBar(searching: false, section: section)
+        } else {
+            if nativeItemsRevealed {
+                if section == .hidden { rehidePresentation(); return }
+                if presentedSection == .alwaysHidden { revealNativeSection(.hidden); return }
+            }
+            revealNativeSection(section)
+        }
+    }
+
+    private func revealNativeSection(_ section: AppSections.Section) {
+        guard !isPending else { return }
+        guard !selected.isEmpty else { chooseApps(); return }
+        guard AXIsProcessTrusted() else { requestAccessibility(); return }
+        guard dismissTemporaryMenu() else { return }
+        visibilityRequested = true
+        restore(message: "Selected section is shown temporarily.", clearIntent: false)
+        let generation = operation
+        let remaining = section == .alwaysHidden ? Set<String>() : sections.alwaysHidden.intersection(currentBundles())
+        isPending = true
+        Task {
+            let error = remaining.isEmpty ? nil : await activate(Array(remaining))
+            guard generation == operation else { return }
+            isPending = false
+            if let error { restore(message: error); return }
+            presentedSection = section
             nativeItemsRevealed = true
             presentationStarted = Date()
             pointerEnteredPresentation = pointerInMenuBar(NSEvent.mouseLocation)
+            try? await Task.sleep(for: .seconds(1))
+            if generation == operation { ensureControl() }
         }
     }
 
@@ -433,7 +475,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if let menu = settingsMenu, let event = NSApp.currentEvent {
                 NSMenu.popUpContextMenu(menu, with: event, for: sender)
             }
-        } else { togglePresentation() }
+        } else {
+            let flags = NSApp.currentEvent?.modifierFlags.intersection([.command, .control, .option, .shift]) ?? []
+            togglePresentation(section: flags == .option ? .alwaysHidden : .hidden)
+        }
     }
 
     private func barAnchor() -> (NSRect, NSScreen)? {
@@ -492,18 +537,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         presentBar(searching: false)
     }
 
-    @objc private func showIconSearch() { presentBar(searching: true) }
+    @objc private func toggleHiddenSection() { togglePresentation() }
 
-    private func presentBar(searching: Bool) {
+    @objc private func showIconSearch() {
+        if hiddenBar.isVisible && hiddenBar.isSearching { hiddenBar.close(); return }
+        presentBar(searching: true)
+    }
+
+    @objc private func showAlwaysHidden() { togglePresentation(section: .alwaysHidden) }
+
+    private func presentBar(searching: Bool, section: AppSections.Section = .hidden) {
         if temporaryBundle != nil {
             guard !isPending, dismissTemporaryMenu() else { return }
-            hideSelectedApps(then: { [weak self] in self?.presentBar(searching: searching) })
+            hideSelectedApps(then: { [weak self] in self?.presentBar(searching: searching, section: section) })
             return
         }
         guard !isPending, let (anchor, screen) = presentationAnchor() else { return }
         requestedBarAnchor = nil
         guard AXIsProcessTrusted() else { requestAccessibility(); return }
-        guard searching || !selected.isEmpty else { chooseApps(); return }
+        guard searching || !sections.bundles(in: section).isEmpty else {
+            chooseApps()
+            setStatus("Assign an app to the \(section.title) section first.")
+            return
+        }
         guard CGPreflightScreenCaptureAccess() else {
             let alert = NSAlert()
             alert.messageText = "Allow NookBar to read menu bar icons"
@@ -518,11 +574,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         visibilityRequested = !selected.isEmpty
         if visibility.active && !cachedIcons.isEmpty && cachedScreenFrame == screen.frame && (!searching || cachedIncludesVisible) {
-            let icons = searching ? cachedIcons : cachedIcons.filter { selected.contains($0.bundle) }
+            let icons = searching ? cachedIcons : cachedIcons.filter { sections.bundles(in: section).contains($0.bundle) }
+            guard !icons.isEmpty else {
+                chooseApps()
+                setStatus("No icons from the \(section.title) section are available on this display.")
+                return
+            }
+            presentedSection = section
             presentationStarted = Date()
             pointerEnteredPresentation = pointerInMenuBar(NSEvent.mouseLocation)
             pointerLeftPresentation = nil
-            hiddenBar.show(icons: icons, anchor: anchor, screen: screen, searching: searching)
+            hiddenBar.show(icons: icons, anchor: anchor, screen: screen, searching: searching, sectionTitle: section.title)
             return
         }
         // Restore for one fresh capture, then hide again before displaying the strip.
@@ -543,11 +605,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 cachedIcons = icons
                 cachedScreenFrame = screen.frame
                 cachedIncludesVisible = searching
+                presentedSection = section
+                let shown = searching ? icons : icons.filter { sections.bundles(in: section).contains($0.bundle) }
+                guard !shown.isEmpty else { throw HiddenBar.BarError.noIcons }
                 presentationStarted = Date()
                 pointerEnteredPresentation = pointerInMenuBar(NSEvent.mouseLocation)
                 pointerLeftPresentation = nil
                 setStatus("Click NookBar to open hidden icons. Right-click for settings.")
-                hiddenBar.show(icons: icons, anchor: anchor, screen: screen, searching: searching)
+                hiddenBar.show(icons: shown, anchor: anchor, screen: screen, searching: searching, sectionTitle: section.title)
                 try? await Task.sleep(for: .seconds(1))
                 if generation == operation { ensureControl() }
             } catch {
@@ -642,11 +707,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showAll()
         refreshApps()
         if appWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 460),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: 500),
                                   styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             window.title = "NookBar — Choose Apps"
             window.isReleasedWhenClosed = false
-            window.minSize = NSSize(width: 420, height: 360)
+            window.minSize = NSSize(width: 520, height: 400)
             let stack = NSStackView()
             stack.orientation = .vertical
             stack.alignment = .leading
@@ -659,7 +724,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 20),
                 stack.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -20)
             ])
-            let intro = NSTextField(wrappingLabelWithString: "Select the apps you want to tuck away. Their icons share visibility across displays.")
+            let intro = NSTextField(wrappingLabelWithString: "Choose a section for each app. Hidden opens with a click; Always Hidden opens with Option-click. Each app’s icons share a section across displays.")
             stack.addArrangedSubview(intro)
             intro.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
             let access = NSButton(title: "Enable Accessibility Access…", target: self, action: #selector(requestAccessibility))
@@ -683,13 +748,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             appList = list
             let selectionButtons = NSStackView()
             selectionButtons.spacing = 8
-            for (title, action) in [("Refresh Apps", #selector(refreshAppWindow)), ("Select All", #selector(selectAllApps)), ("Clear Selection", #selector(clearSelection))] {
+            for (title, action) in [("Refresh Apps", #selector(refreshAppWindow)), ("Select All", #selector(selectAllApps)), ("Clear Selection", #selector(clearSelection)), ("Settings…", #selector(showPreferences))] {
                 selectionButtons.addArrangedSubview(NSButton(title: title, target: self, action: action))
             }
             stack.addArrangedSubview(selectionButtons)
             let buttons = NSStackView()
             buttons.spacing = 8
-            for (title, action) in [("Hide Selected", #selector(toggleVisibility)), ("Show All", #selector(showAll)), ("Hidden Icons", #selector(showHiddenBar))] {
+            for (title, action) in [("Hide Selected", #selector(toggleVisibility)), ("Show All", #selector(showAll)), ("Hidden Icons", #selector(toggleHiddenSection)), ("Always-Hidden Icons", #selector(showAlwaysHidden))] {
                 buttons.addArrangedSubview(NSButton(title: title, target: self, action: action))
             }
             stack.addArrangedSubview(buttons)
@@ -716,21 +781,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let list = appList else { return }
         for view in list.arrangedSubviews { list.removeArrangedSubview(view); view.removeFromSuperview() }
         for app in apps {
-            let checkbox = NSButton(checkboxWithTitle: app.name, target: self, action: #selector(selectApp(_:)))
-            checkbox.identifier = NSUserInterfaceItemIdentifier(app.bundle)
-            checkbox.state = selected.contains(app.bundle) ? .on : .off
-            checkbox.toolTip = app.bundle
-            list.addArrangedSubview(checkbox)
+            let row = NSStackView()
+            row.spacing = 12
+            let label = NSTextField(labelWithString: app.name)
+            label.widthAnchor.constraint(equalToConstant: 230).isActive = true
+            label.lineBreakMode = .byTruncatingTail
+            label.toolTip = app.bundle
+            row.addArrangedSubview(label)
+            let picker = NSPopUpButton()
+            picker.identifier = .init(app.bundle)
+            picker.target = self; picker.action = #selector(selectApp(_:))
+            picker.setAccessibilityLabel("Section for \(app.name)")
+            for section in AppSections.Section.allCases {
+                picker.addItem(withTitle: section.title)
+                picker.lastItem?.representedObject = section.rawValue
+            }
+            picker.selectItem(at: AppSections.Section.allCases.firstIndex(of: sections.section(for: app.bundle))!)
+            picker.widthAnchor.constraint(equalToConstant: 150).isActive = true
+            row.addArrangedSubview(picker)
+            list.addArrangedSubview(row)
         }
         if apps.isEmpty { list.addArrangedSubview(NSTextField(labelWithString: "No apps found")) }
     }
 
-    @objc private func selectApp(_ sender: NSButton) {
-        guard let bundle = sender.identifier?.rawValue else { return }
+    @objc private func selectApp(_ sender: NSPopUpButton) {
+        guard let bundle = sender.identifier?.rawValue,
+              let raw = sender.selectedItem?.representedObject as? String,
+              let section = AppSections.Section(rawValue: raw) else { return }
         showAll()
-        if sender.state == .on { selected.insert(bundle) } else { selected.remove(bundle) }
-        UserDefaults.standard.set(selected.sorted(), forKey: "HiddenApps")
-        setStatus("\(selected.count) app(s) selected. Click Hide Selected.")
+        sections.assign(bundle, to: section)
+        setStatus("\(sections.hidden.count) hidden, \(sections.alwaysHidden.count) always hidden. Click Hide Selected.")
     }
 
     @objc private func refreshAppWindow() {
@@ -742,16 +822,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func selectAllApps() {
         showAll()
-        selected = Set(apps.map(\.bundle))
-        UserDefaults.standard.set(selected.sorted(), forKey: "HiddenApps")
+        sections.hideAll(Set(apps.map(\.bundle)))
         populateAppList()
         setStatus("\(selected.count) app(s) selected. Click Hide Selected.")
     }
 
     @objc private func clearSelection() {
         showAll()
-        selected.removeAll()
-        UserDefaults.standard.set([], forKey: "HiddenApps")
+        sections.clear()
         populateAppList()
         setStatus("Choose apps to tuck away.")
     }

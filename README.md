@@ -11,19 +11,27 @@ icons from the same app share one selection.
 
 1. Enable NookBar in the system Accessibility permission pane when prompted.
 2. Right-click the tray icon and choose **Choose Apps…**.
-3. Check apps individually or click **Select All**, then click **Hide Selected**.
+3. Assign apps to **Visible**, **Hidden**, or **Always Hidden**, then click **Hide Selected**.
 4. Left-click NookBar to open the hidden icon strip. Allow Screen Recording when prompted.
 5. Click an icon in the strip to open its original menu bar item. It is temporarily
    revealed, then hidden again when its menu closes.
 6. Click NookBar again, click outside, or press Escape to close the strip. Right-click
    NookBar for settings; **Show All Apps** restores all selected icons.
 
+Option-click NookBar to open the always-hidden section. You can also use
+**Always-Hidden Icons…** in its menu or the app picker. The normal strip excludes
+always-hidden apps. In native menu bar mode, showing Always Hidden reveals both
+sections; hiding that section leaves the normal hidden section revealed. **Select
+All** preserves apps already assigned to Always Hidden; **Clear Selection** makes
+both sections visible.
+
 Selections are saved. **Settings…** includes hide on launch, launch at login,
 click/hover/scroll activation, bar position, and smart, timed, or focused-app
 rehiding. Turn off **Show hidden icons in a separate bar** to reveal icons in the native menu
 bar instead. The default is to hide your saved selection on launch.
 
-The **Shortcuts** tab records shortcuts for showing hidden icons and searching.
+The **Shortcuts** tab records shortcuts for showing hidden icons, showing
+always-hidden icons, searching, and toggling the separate bar.
 Click a shortcut button, then press a combination containing Command, Control,
 or Option. Escape cancels recording; Delete clears a shortcut. No global shortcut
 is assigned by default. **Search Menu Bar Icons…** searches captured third-party

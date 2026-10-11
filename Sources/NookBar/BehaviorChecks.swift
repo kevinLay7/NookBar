@@ -36,6 +36,19 @@ enum BehaviorChecks {
         check(!Shortcut(keyCode: 40, modifiers: NSEvent.ModifierFlags.shift.rawValue, key: "k").valid, "ordinary typing cannot become a global shortcut")
         preferences.setShortcut(nil, for: .search)
         check(preferences.shortcut(.search) == nil, "clearing shortcut removes its registration settings")
+        defaults.set(["example.one", "example.two", "com.apple.controlcenter", "com.codenest.nookbar"], forKey: "HiddenApps")
+        defaults.set(["example.two"], forKey: "AlwaysHiddenApps")
+        let sections = AppSections(defaults: defaults)
+        check(sections.hidden == ["example.one"] && sections.alwaysHidden == ["example.two"], "always-hidden membership wins and system/control icons stay visible")
+        sections.assign("example.one", to: .alwaysHidden)
+        check(sections.hidden.isEmpty && sections.alwaysHidden == ["example.one", "example.two"], "moving between sections has no duplicate membership")
+        sections.hideAll(["example.one", "example.three"])
+        check(sections.hidden == ["example.three"] && sections.alwaysHidden.contains("example.one"), "select all preserves always-hidden membership")
+        sections.assign("example.one", to: .visible)
+        let restoredSections = AppSections(defaults: defaults)
+        check(restoredSections.section(for: "example.one") == .visible && restoredSections.section(for: "example.two") == .alwaysHidden && restoredSections.tucked == ["example.two", "example.three"], "sections persist and visible membership clears hiding")
+        sections.clear()
+        check(AppSections(defaults: defaults).tucked.isEmpty, "clear selection clears both hidden sections")
         let image = NSImage(size: NSSize(width: 20, height: 20))
         let icons = [
             HiddenBar.Icon(bundle: "example.amphetamine", index: 0, label: "∞", appName: "Amphetamine", image: image),
@@ -47,6 +60,6 @@ enum BehaviorChecks {
         check(HiddenBar.matchingIndices(in: icons, query: " stats ") == [1, 2], "search preserves separate icons from one app")
         check(HiddenBar.matchingIndices(in: icons, query: "cafe") == [3], "search ignores accents")
         check(HiddenBar.matchingIndices(in: icons, query: "not installed").isEmpty, "missing query has no false match")
-        print("Behavior checks passed: activation, rehide, persistence, shortcut validation, and icon search.")
+        print("Behavior checks passed: activation, rehide, section persistence, shortcut validation, and icon search.")
     }
 }

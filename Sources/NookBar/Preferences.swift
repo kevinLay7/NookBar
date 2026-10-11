@@ -20,8 +20,15 @@ final class Preferences {
     enum Location: String, CaseIterable { case dynamic, pointer, icon }
     enum Rehide: String, CaseIterable { case smart, timed, focusedApp }
     enum ShortcutAction: Int, CaseIterable {
-        case toggle = 1, search = 2
-        var title: String { self == .toggle ? "Show or hide hidden icons" : "Search menu bar icons" }
+        case toggle = 1, search = 2, alwaysHidden = 3, barMode = 4
+        var title: String {
+            switch self {
+            case .toggle: "Show or hide hidden icons"
+            case .search: "Search menu bar icons"
+            case .alwaysHidden: "Show or hide always-hidden icons"
+            case .barMode: "Toggle the hidden icon bar"
+            }
+        }
     }
 
     let defaults: UserDefaults
@@ -88,12 +95,14 @@ final class PreferencesWindow: NSObject, NSTextFieldDelegate {
     private let feedback = NSTextField(wrappingLabelWithString: "")
     private let shortcutFeedback = NSTextField(wrappingLabelWithString: "")
     private var loginButton: NSButton?
+    private var flagButtons: [Preferences.Flag: NSButton] = [:]
     var onChange: (() -> Void)?
     var onRecording: ((Bool) -> Void)?
 
     init(preferences: Preferences) { self.preferences = preferences }
     func show() {
         if window == nil { build() }
+        for (flag, button) in flagButtons { button.state = preferences.enabled(flag) ? .on : .off }
         loginButton?.state = SMAppService.mainApp.status == .enabled ? .on : .off
         if SMAppService.mainApp.status == .requiresApproval {
             feedback.stringValue = "Launch at login needs approval in System Settings → General → Login Items."
@@ -192,6 +201,7 @@ final class PreferencesWindow: NSObject, NSTextFieldDelegate {
         let button = NSButton(checkboxWithTitle: flag.title, target: self, action: #selector(changeFlag))
         button.identifier = .init(flag.rawValue)
         button.state = preferences.enabled(flag) ? .on : .off
+        flagButtons[flag] = button
         stack.addArrangedSubview(button)
     }
     private func popup(_ title: String, key: String, values: [(String, String)], in stack: NSStackView) {

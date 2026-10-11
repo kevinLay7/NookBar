@@ -65,7 +65,7 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         }
     }
 
-    func show(icons: [Icon], anchor: NSRect, screen: NSScreen, searching: Bool = false) {
+    func show(icons: [Icon], anchor: NSRect, screen: NSScreen, searching: Bool = false, sectionTitle: String = "Hidden") {
         close(notify: false)
         self.icons = icons
         isSearching = searching
@@ -89,7 +89,7 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         let height: CGFloat = searching ? min(340, screen.visibleFrame.height - 40) : 44
         let panel = IconPanel(contentRect: NSRect(x: 0, y: 0, width: visibleWidth, height: height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.title = searching ? "NookBar — Search Icons" : "NookBar — Hidden Icons"
+        panel.title = searching ? "NookBar — Search Icons" : "NookBar — \(sectionTitle) Icons"
         panel.hidesOnDeactivate = false
         panel.level = .popUpMenu
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
