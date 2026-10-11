@@ -114,3 +114,21 @@ app lifecycle changes, and unexpected exit remain unvalidated.
 - Build, signature, plist, diagnostics, and behavior checks pass. This batch
   adds a reproducible diagnostic, not completed per-icon layout or hiding.
 - See `PER_ICON_RESEARCH.md` for bounded conclusions and remaining native API work.
+
+## Native gesture and utility interface batch, 2026-10-11
+
+- In the signed installed app's separator lab, Swap L and R moved its owned L
+  icon left of R and then right of R. Independent AX reads and settled captured
+  menu regions agreed on both orders. The moved order also survived relaunch.
+- Runnable check: launch `--separator-lab`, Read Current State after items settle,
+  swap twice, and inspect each settled capture. Quit/relaunch and compare the
+  order, then close the lab and confirm its temporary items are removed. Only
+  diagnostic items are eligible for this control.
+- Expanding a transparent 10,000-point image in variable-length mode also failed
+  to hide other icons. Contracting removed the image and restored the divider.
+- The private utility ping was denied. A correlated MenuBarAgent log identified
+  its missing Apple-private entitlement. This route cannot support the ordinary
+  unentitled app; see PER_ICON_RESEARCH.md for evidence and scope.
+- Cancellation and termination have immediate gesture release in code; real
+  interruption coverage, foreign/system items, each display, and independent
+  hiding remain pending. This batch does not establish full Ice parity.

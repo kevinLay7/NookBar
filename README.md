@@ -112,7 +112,9 @@ icons belonging to one app may share visibility, and system items have limitatio
 Read [the investigation](docs/ice-investigation.txt) for observed facts and remaining checks.
 Independent item control is still under investigation; see
 [the per-icon research](docs/PER_ICON_RESEARCH.md). Developers can reproduce the
-reversible divider experiment by launching the signed app with `--separator-lab`.
+reversible divider and native movement experiments by launching the signed app
+with `--separator-lab`. The diagnostic tests both fixed and intrinsic widths,
+and Swap L and R moves only its own temporary items through native Command-drag.
 Quit other NookBar copies first. This diagnostic never changes saved section
 assignments, and is not used by normal launches.
 

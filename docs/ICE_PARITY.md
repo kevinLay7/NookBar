@@ -23,7 +23,7 @@ prove the installed Ice build works on this macOS version.
 | Global shortcuts | Native registration and recorder; hidden/always-hidden/search/bar-mode actions | Cross-app execution, conflicts, key-up repeats; remaining app-menu action |
 | Icon search | Captured third-party icons; app/name/bundle filtering and keyboard navigation verified in CUA | Activation, changing-icon refresh, always-hidden and system item coverage |
 | Visible, hidden, always-hidden sections | Persistent app assignments, separate strips and native reveal verified | Physical Option activation, independent per-icon membership |
-| Drag layout and ordering | Missing | Drag between sections and reorder; persistent identity; Command-drag reveal-all behavior |
+| Drag layout and ordering | Developer diagnostic verifies owned-item movement in both directions and relaunch persistence; public layout UI missing | Drag between sections and reorder; persistent identity; Command-drag reveal-all behavior |
 | Launch at login | Native Service Management option | Registration status and actual login; approval-required/error states |
 | Startup visibility | Saved hide-on-launch option | Signed installed-app relaunch and startup permission failure |
 | App launches/exits, sleep, lock, Spaces | Restore/resume and running-app reconciliation | Real lifecycle and multiple-display checks; fail-open restoration |

@@ -35,6 +35,47 @@ Conclusion: this reproduction does not hide the icons to its left on this Mac.
 Replacing discovery alone is insufficient to establish a working per-icon
 separator backend. It does not rule out another native mechanism.
 
+## Intrinsic-width follow-up
+
+A second button supplies a transparent 10,000-point image, sets image scaling to
+none, and requests the AppKit variable-length mode. This separates an intrinsic
+image-width request from the fixed-length setter used in the original probe.
+The image uses a bounded 40,000-byte transparent bitmap representation, and
+contracting removes it. The same ten-second restoration timer applies.
+
+Observed on the signed installed app through CUA: requested length -1, image
+width 10,000, and a 10,000-point local AppKit window. AX groups changed from 84 to
+80 because the divider's occurrences disappeared. The captured menu region still
+showed L, R, and all third-party icons; no third-party app disappeared from the
+snapshot. Contracting returned to 84 groups and four NookBar status items.
+Thus neither this intrinsic-width variant nor the original fixed-length variant
+established a working separator hiding backend on this Mac.
+
+## Native movement follow-up
+
+The diagnostic now has a Swap L and R button. It accepts only its own named L/R
+items, requires non-overlapping on-screen geometry, a contracted divider,
+event-posting access, and released mouse buttons. It requests a bounded native
+Command-drag through the app's movement code. Cancellation, close, and termination
+release any pending mouse gesture immediately; foreign item identities are not
+accepted. This is a developer check, not a public arrangement feature.
+
+Verified through CUA, independent AX metadata, and settled menu-region images:
+
+- Initial R x=1175, L x=1835. Moving L left of R produced L x=1175, R x=1215.
+- The L/R order survived a signed-app relaunch. The legacy preferred-position
+  keys remained 2 for L, 0 for R, and 1 for the divider, so those values do not
+  describe the observed persisted native layout.
+- Swapping in the other direction produced R x=1175, L x=1215. Swapping again
+  returned L x=1175, R x=1215. Both captures showed the requested actual order.
+- AXPosition remained non-writable throughout. A native gesture can therefore
+  move these items despite the absence of writable AX geometry.
+
+This establishes movement and relaunch persistence for these owned status items
+on this display. Physical user Command-drag, foreign items, unmovable/system
+items, clipped icons, general stable identity, interruption, and other displays
+still need verification. It does not establish independent icon hiding.
+
 ## Accessibility constraints
 
 A focused read of NookBar's test items found `AXPosition` non-writable. Each
@@ -99,11 +140,46 @@ These static names are leads, not proof of a usable third-party API. Runtime
 reachability, ownership checks, entitlements, identity mapping, and persistence
 are unresolved. No drag-session or utilities request was sent to MenuBarAgent.
 
+## Utility and item-manager interface follow-up
+
+Read-only Objective-C runtime metadata from the installed MenuBarClientCore
+framework exposes MBMenuBarItemManager, item IDs/content/tags, and layout callback
+methods. Its utility protocol includes getPreferredTrailingItemPositions and
+listMenuBarItemsForSpaceID:completionHandler:. This expands the earlier two-class
+assessment probe; the native item manager's ownership boundary is still unknown.
+
+Protocol evidence: `ev_cb3600d5eec0eb98cd56da4052f76ad9b116401daad7fd76ae14b53349c3da7f`.
+Class metadata evidence: `ev_958ff387329c453527811805e2f1c1906d14871ba4c81466371c5b01d038a37d`.
+
+The framework is present in the dyld shared cache rather than as a standalone
+Mach-O file. Apple's dyld_info found its exports and decoded the service-definition
+getters; a controlled probe of the installed getters returned:
+
+- Service: com.apple.MenuBarAgent.utilities
+- Required entitlement name: com.apple.private.menubar.utilities
+
+Getter evidence: `ev_dd4d44eda57ae0bfc16c2366d90eca31fdcf27c428b6ec72b659c459202f1c5f`.
+
+A separate read-only helper used a reconstructed Swift interface matching the
+exported initializer and final async method symbols. The installed framework was
+loaded into this helper at launch. Its ping request returned sessionNotActive;
+subsequent position/list requests were skipped after that error. MenuBarAgent's
+log at 2026-10-11 15:22:40 reported the same helper PID missing the private
+utilities entitlement. No mutation method, private entitlement grant, or change
+to system protections was attempted.
+
+Request evidence: `ev_5847af4eab50e198360fa9e7505f836556a6b839b49a1bfafdf62a0b08313de8`.
+The request and correlated denial rule out this utility connection for that
+unentitled probe. They do not prove the authorization rules of the item manager
+or other service interfaces. Do not build the public app around this rejected
+utility route or represent it as an Accessibility permission the user can enable.
+
 ## Next checks
 
-1. Trace native overflow locations and drag-session contracts, including their
-   ownership and permission checks, before attempting to use them.
-2. Validate a physical Command-drag and its saved item identity/position.
+1. Extend the verified native gesture path to a general arrangement operation
+   with validated identity, ownership, restoration, and interruption handling.
+   Trace overflow visibility contracts without relying on the rejected utility service.
+2. Validate foreign and physical Command-drag, including saved item identity/position.
 3. Match actual rendered icons to stable identities across rearrangement and
    relaunch, including several icons from one app.
 4. Implement and verify independent native hiding and ordering, restoration,
