@@ -48,6 +48,15 @@ images stay in memory. Appearance pauses while the menu bar hides automatically.
 Full/split rendering has been checked on the built-in notched display; other
 displays, Spaces, fullscreen, and automatic theme changes still need checks.
 
+The **Spacing** tab adjusts menu bar item spacing from compact to spacious. Click
+**Apply**, then **Relaunch Menu Bar Apps…** and choose which apps to restart so they
+load the change. Save your work first; apps that refuse to quit stay open and are
+reported for manual relaunch. **macOS Default** removes the spacing overrides.
+**Restore Previous Spacing** restores the preferences present before NookBar first
+changed them. Some system icons may require logging out and back in. Spacing has
+been verified with NookBar’s native probe icons on the built-in display; full
+third-party/system-icon and per-display coverage remains pending.
+
 The **Shortcuts** tab records shortcuts for showing hidden icons, showing
 always-hidden icons, searching, and toggling the separate bar.
 Click a shortcut button, then press a combination containing Command, Control,

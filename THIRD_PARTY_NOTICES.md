@@ -18,6 +18,12 @@ Copyright (C) 2024 Jordan Baird. Licensed under GPL-3.0-or-later.
 NookBar uses its own native settings interface and a ScreenCaptureKit wallpaper
 strip rather than Ice’s wallpaper capture implementation.
 
+The menu bar spacing preference keys, base value, and offset range follow
+Ice’s `Ice/MenuBar/Spacing/MenuBarItemSpacingManager.swift` at the same commit.
+Copyright (C) 2024 Jordan Baird, GPL-3.0-or-later. NookBar uses CFPreferences,
+transaction rollback, a persisted restoration snapshot, and an explicit app
+selection dialog with graceful quit requests.
+
 These projects are not runtime dependencies. The adapted bridge is compiled
 as part of NookBar. Apple framework names describe system dependencies and do
 not imply Apple's endorsement.

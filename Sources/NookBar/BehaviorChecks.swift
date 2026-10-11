@@ -98,6 +98,34 @@ enum BehaviorChecks {
         appearance.shape = .full; appearance.full.left = .square
         let square = AppearanceConfiguration.path(for: appearance.pieces(in: barBounds, menuWidth: nil, iconStart: nil, hasNotch: true))
         check(square.contains(CGPoint(x: 1, y: 9)) && !square.contains(CGPoint(x: 996, y: 9)), "independent square and round end caps preserve their geometry")
-        print("Behavior checks passed: activation, rehide, sections, shortcuts, search, arrangement, and appearance persistence/geometry.")
+        let spacingDomain = "com.codenest.nookbar.spacing-check.\(UUID().uuidString)" as CFString
+        let spacingBefore = try! MenuBarSpacingValues(domain: spacingDomain)
+        defer { try? spacingBefore.apply(domain: spacingDomain) }
+        check(spacingBefore.spacing == nil && spacingBefore.padding == nil, "spacing check starts with an isolated host-specific domain")
+        try! MenuBarSpacingValues(offset: -8).apply(domain: spacingDomain)
+        let compact = try! MenuBarSpacingValues(domain: spacingDomain)
+        check(compact.offset == -8 && compact.spacing == compact.padding, "spacing writes and reads both host-specific preferences")
+        let savedSpacing = try! JSONEncoder().encode(compact)
+        try! MenuBarSpacingValues(offset: 16).apply(domain: spacingDomain)
+        check(try! MenuBarSpacingValues(domain: spacingDomain).offset == 16, "widest spacing survives native preference round trip")
+        try! JSONDecoder().decode(MenuBarSpacingValues.self, from: savedSpacing).apply(domain: spacingDomain)
+        check(try! MenuBarSpacingValues(domain: spacingDomain) == compact, "spacing backup restores the prior native values")
+        var customSpacing = try! MenuBarSpacingValues(offset: 8)
+        customSpacing.padding = compact.padding
+        check(customSpacing.offset == nil, "mismatched system spacing is labeled custom")
+        try! customSpacing.apply(domain: spacingDomain)
+        let customBackup = try! JSONEncoder().encode(MenuBarSpacingValues(domain: spacingDomain))
+        try! MenuBarSpacingValues(offset: 0).apply(domain: spacingDomain)
+        try! JSONDecoder().decode(MenuBarSpacingValues.self, from: customBackup).apply(domain: spacingDomain)
+        check(try! MenuBarSpacingValues(domain: spacingDomain) == customSpacing, "custom prior preferences restore exactly instead of becoming a default")
+        try! compact.apply(domain: spacingDomain)
+        var invalidSpacing = try! MenuBarSpacingValues(offset: 8)
+        invalidSpacing.padding = Data("invalid property list".utf8)
+        check((try? invalidSpacing.apply(domain: spacingDomain)) == nil, "invalid second preference rejects a spacing transaction")
+        check(try! MenuBarSpacingValues(domain: spacingDomain) == compact, "partial spacing write rolls both preferences back")
+        try! MenuBarSpacingValues(offset: 0).apply(domain: spacingDomain)
+        check(try! MenuBarSpacingValues(domain: spacingDomain) == spacingBefore, "default spacing removes both host-specific overrides")
+        check((try? MenuBarSpacingValues(offset: -17)) == nil && (try? MenuBarSpacingValues(offset: 3)) == nil, "spacing rejects out-of-range and non-step values")
+        print("Behavior checks passed: activation, rehide, sections, shortcuts, search, arrangement, appearance persistence/geometry, and native spacing preferences.")
     }
 }

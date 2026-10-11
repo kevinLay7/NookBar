@@ -93,6 +93,7 @@ struct Shortcut: Codable, Equatable {
 final class PreferencesWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let preferences: Preferences
     private let appearance: MenuBarAppearance
+    private let spacing: MenuBarSpacing
     private var tabs: NSTabView?
     private var window: NSWindow?
     private let feedback = NSTextField(wrappingLabelWithString: "")
@@ -103,7 +104,7 @@ final class PreferencesWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     var onChange: (() -> Void)?
     var onRecording: ((Bool) -> Void)?
 
-    init(preferences: Preferences, appearance: MenuBarAppearance) { self.preferences = preferences; self.appearance = appearance }
+    init(preferences: Preferences, appearance: MenuBarAppearance, spacing: MenuBarSpacing) { self.preferences = preferences; self.appearance = appearance; self.spacing = spacing }
     func show(tab: String? = nil) {
         if window == nil { build() }
         if let tab { tabs?.selectTabViewItem(withIdentifier: tab) }
@@ -181,6 +182,9 @@ final class PreferencesWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         let appearanceTab = NSTabViewItem(identifier: "Appearance"); appearanceTab.label = "Appearance"
         appearanceTab.view = NSHostingView(rootView: AppearanceEditor(manager: appearance))
         tabs.addTabViewItem(appearanceTab)
+        let spacingTab = NSTabViewItem(identifier: "Spacing"); spacingTab.label = "Spacing"
+        spacingTab.view = NSHostingView(rootView: SpacingEditor(manager: spacing))
+        tabs.addTabViewItem(spacingTab)
         self.window = window
         window.center()
     }

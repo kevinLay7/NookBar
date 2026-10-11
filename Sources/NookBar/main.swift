@@ -76,8 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var controlPanel: NSPanel?
     private var nativeControlAnchor: (NSRect, NSScreen)?
     private let preferences = Preferences()
+    private lazy var spacing = MenuBarSpacing(defaults: preferences.defaults)
+    private var relaunchingMenuApps = false
     private lazy var appearance = MenuBarAppearance(defaults: preferences.defaults)
-    private lazy var preferencesWindow = PreferencesWindow(preferences: preferences, appearance: appearance)
+    private lazy var preferencesWindow = PreferencesWindow(preferences: preferences, appearance: appearance, spacing: spacing)
     private let hotKeys = GlobalHotKeys()
     private var localBarMonitor: Any?
     private var localKeyMonitor: Any?
@@ -93,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var cachedIncludesVisible = false
     private var pointerEnteredPresentation = false
     private var pointerLeftPresentation: Date?
+    private var spacingProbeItems: [NSStatusItem] = []
     private var separatorLab: SeparatorLab?
     private lazy var arrangementWindow = ArrangementWindow()
     private var arrangingIcons = false
@@ -150,6 +153,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.action = #selector(statusClicked)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
+        // Developer-only native spacing probe. No persisted positions or foreign icons change.
+        if CommandLine.arguments.contains("--spacing-probe") {
+            for index in 1...3 {
+                let probe = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+                probe.button?.image = NSImage(systemSymbolName: "\(index).circle", accessibilityDescription: "NookBar spacing probe S\(index)")
+                probe.button?.image?.isTemplate = true
+                probe.button?.setAccessibilityLabel("NookBar spacing probe S\(index)")
+                spacingProbeItems.append(probe)
+            }
+        }
         hiddenBar.onSelect = { [weak self] icon in self?.openHiddenIcon(icon) }
         hiddenBar.isControlWindow = { [weak self] window in
             guard let self else { return false }
@@ -209,6 +222,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             arrangingIcons = false
             if visibilityRequested { hideSelectedApps() }
         }
+        spacing.onBeginRelaunch = { [weak self] in
+            guard let self, !isPending, !arrangingIcons, temporaryBundle == nil else { return false }
+            relaunchingMenuApps = true
+            self.restore(message: "Apps restored while menu bar apps relaunch.", clearIntent: false)
+            cachedIcons = []
+            return true
+        }
+        spacing.onEndRelaunch = { [weak self] in
+            guard let self else { return }
+            relaunchingMenuApps = false
+            resumeVisibility()
+        }
         appearance.start()
         preferencesChanged()
         refreshApps()
@@ -235,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         })
         monitor = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, !self.relaunchingMenuApps else { return }
                 let bundles = self.currentBundles()
                 if (self.visibility.active || self.isPending) && !AXIsProcessTrusted() {
                     self.restore(message: "Apps restored because Accessibility access was removed.")
@@ -255,8 +280,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             MainActor.assumeIsolated { self?.checkHoverAndRehide() }
         }
         if selected.isEmpty || CommandLine.arguments.contains("--choose-apps") { chooseApps() }
+        if ["--settings", "--appearance", "--spacing"].contains(where: CommandLine.arguments.contains),
+           preferences.enabled(.hideOnLaunch), !selected.isEmpty {
+            visibilityRequested = true
+            resumeVisibility()
+        }
         if CommandLine.arguments.contains("--settings") { showPreferences() }
         else if CommandLine.arguments.contains("--appearance") { showAppearance() }
+        else if CommandLine.arguments.contains("--spacing") { openPreferences(tab: "Spacing") }
         else if CommandLine.arguments.contains("--arrange-icons") {
             visibilityRequested = preferences.enabled(.hideOnLaunch) && !selected.isEmpty
             showArrangement()
@@ -336,6 +367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAll() { restore(message: "All apps are shown.") }
 
     @objc private func showArrangement() {
+        guard !relaunchingMenuApps else { return }
         guard dismissTemporaryMenu() else { return }
         arrangingIcons = true
         restore(message: "All icons are visible while arranging.", clearIntent: false)
@@ -387,6 +419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func togglePresentation(section: AppSections.Section = .hidden) {
+        guard !relaunchingMenuApps else { return }
         if arrangingIcons { arrangementWindow.show(); return }
         guard !isPending else { return }
         hoverSuppressed = true
@@ -714,7 +747,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func hideSelectedApps(then completion: (() -> Void)? = nil) {
-        guard !arrangingIcons, !isPending else { return }
+        guard !arrangingIcons, !isPending, !relaunchingMenuApps else { return }
         guard AXIsProcessTrusted() else { requestAccessibility(); return }
         let own = Bundle.main.bundleIdentifier ?? "com.codenest.nookbar"
         let targets = selected.intersection(currentBundles()).filter { $0 != own && !$0.hasPrefix("com.apple.") }
@@ -743,6 +776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func chooseApps() {
+        guard !relaunchingMenuApps else { return }
         showAll()
         refreshApps()
         if appWindow == nil {
@@ -871,6 +905,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sections.clear()
         populateAppList()
         setStatus("Choose apps to tuck away.")
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if spacing.isBusy { preferencesWindow.report("Wait until menu bar apps finish relaunching before quitting NookBar."); return .terminateCancel }
+        return .terminateNow
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -27,7 +27,7 @@ prove the installed Ice build works on this macOS version.
 | Launch at login | Native Service Management option | Registration status and actual login; approval-required/error states |
 | Startup visibility | Saved hide-on-launch option | Signed installed-app relaunch and startup permission failure |
 | App launches/exits, sleep, lock, Spaces | Restore/resume and running-app reconciliation | Real lifecycle and multiple-display checks; fail-open restoration |
-| Menu bar spacing | Missing | Native spacing and restoration |
+| Menu bar spacing | Native host-specific spacing/padding settings, −16…+16 offset, defaults reset, prior-value restoration, and selective graceful app relaunch; visible owned icons verified at default, −8, −16, and +16; relaunch success/refusal and cancellation tested | Full third-party/system-icon coverage, other displays, logout behavior, launch failures, and custom pre-existing value GUI restoration |
 | Menu bar appearance | Native Appearance settings and renderer: full/split shapes, independent caps, notch inset, shadow, border, solid/gradient tint, and separate light/dark profiles; actual full/split rendering and held-preview restoration verified on built-in display | Other displays, Spaces/fullscreen, automatic theme changes, moving wallpapers, permission revocation, auto-hide resume, and combinations with fallback control/hiding |
 | Hide application menus when more room is needed | Missing | Native behavior, Dock visibility and restoration |
 | Permissions and diagnostics | Accessibility and capture prompts | Revocation, stable signing, actionable errors and no stuck invisible control |
@@ -53,3 +53,5 @@ not provide a working independent-item backend.
   supports completion. The overall Ice-parity goal remains active.
 
 See [appearance research and verification](APPEARANCE_RESEARCH.md) for rendering evidence and its remaining limits.
+
+See [spacing research and verification](SPACING_RESEARCH.md) for native preference and rendering evidence.

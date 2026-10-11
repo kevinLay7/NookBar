@@ -212,3 +212,41 @@ app lifecycle changes, and unexpected exit remain unvalidated.
   displays; all four cap combinations; automatic system theme transitions;
   animated wallpapers; Spaces/fullscreen; sleep/lock; permission revocation;
   auto-hide pause/resume; and fallback-control geometry when selected apps hide.
+
+## Spacing follow-up, 2026-10-11
+
+- Build/signature/diagnostics passed. Isolated native CFPreferences checks covered
+  paired host-specific writes, range/step rejection, prior-value serialization
+  and restoration, default override deletion, and rollback after an invalid
+  second preference. Mismatched custom values also round-tripped exactly through
+  the backup. The tests do not modify the real global domain.
+- Installed-app CUA selected offset −8 and clicked Apply. Independent `defaults
+  -currentHost read -g` read back 8 for both spacing/padding keys. Defaults reset
+  and Restore Previous removed both original-absent overrides and cleared the
+  saved restoration snapshot.
+- The relaunch chooser listed actual third-party menu bar apps. Only a disposable
+  probe was selected; its PID changed from 28358 to 28509 after a normal quit/open.
+  A second test configured the probe to refuse Quit. Its delegate recorded the
+  refusal, PID 28784 stayed alive, and after five seconds NookBar reported that
+  it needed a manual relaunch. Other apps were not selected for these tests.
+- Standalone fixed-width probe measurements were contaminated by native overflow:
+  a menu-region screenshot showed two probe icons collapsed into the system’s
+  overflow control. Those AX coordinates are not counted as visible-spacing proof.
+- A developer-only `--spacing-probe` adds three variable-width numbered icons to
+  NookBar itself, with no persisted positions. With saved apps hidden, all three
+  were physically visible. CUA applied each setting and NookBar alone relaunched
+  to load it. Independent AX measurements showed adjacent intervals of 32 pt
+  at default, 24 pt at −8, 48 pt at +16, and 16 pt at −16. Physical menu-region
+  captures confirmed the three visible icons at each setting. Restore Previous
+  and another launch returned the interval to 32 pt and both keys to absent.
+- Launching directly into Settings/Appearance/Spacing now honors hide-on-launch.
+  While hiding was active, opening the relaunch chooser restored all selected
+  apps for discovery (AX groups 56 → 92 with owned probes). Cancel returned to
+  the requested hidden state (92 → 56), without relaunching any apps.
+- Saved hidden membership changed during the session to include Macs Fan Control.
+  Current membership is preserved. The standalone probe’s disappearance under
+  assessment-mode hiding requires a fresh test that records membership alongside
+  the assertion and runtime state; no root cause is assigned.
+- Pending: broad third-party and system-item rendering, other displays, custom
+  pre-existing spacing GUI restoration, launches that fail, logout behavior, and
+  combinations with icon arrangement, appearance overlays, and native overflow.
