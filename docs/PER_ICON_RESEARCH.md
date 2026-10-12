@@ -8,12 +8,84 @@ restores the app fallback; clearing assignments clears overrides as well. The
 native bridge supplies a JSON tuple key of bundle, primary descriptor kind, and
 primary descriptor value, rejecting empty descriptors. This avoids ordinal and
 delimiter-based keys but does not prove stable lifetime, unique membership, or
-stability of changing labels. Future application of these assignments must
-require a unique live match; no movement/capture identity guards are relaxed.
-Behavior checks verify same-app icons keeping different sections across a
-storage reload and removal restoring the app fallback. Normal UI and hiding
-still use app assignments; the per-icon picker and divider integration remain
-unfinished. No real user assignments were migrated or changed.
+stability of changing labels. Assignments now also store owner bundle/PID/launch
+date evidence in `IconSectionProcesses` and require a unique live inventory
+match. Choices survive a NookBar reload in the same owner process; an owner-app
+restart requires deliberate reassignment. Missing, changed, duplicate, or stale
+choices stay visible until confirmed. Unassigned siblings inherit the app
+setting only when all saved same-app choices resolve. No movement/capture
+identity guards are relaxed. Behavior checks cover these storage cases.
+
+The arrangement picker and application flow are connected in the working tree,
+but native production-backend validation remains incomplete. The v4 diagnostic
+failed at divider positioning and order recovery after moving Disk into a
+selective partition. Icons were restored to exposure but original order was
+not proven restored by that run; repair and rollback validation are required.
+Do not treat the earlier adjacent-divider success as proof of arbitrary
+membership arrangement. Same-label replacement lifetime isolation and automatic
+rebinding after target-app restart remain unresolved. No real user section
+assignments were migrated or changed during these diagnostics.
+
+Installed arrangement validation found Stats' three labels came from AXHelp,
+so the original primary-descriptor-only preference keys disabled their section
+controls. Preference keys now support captured AXHelp only when primary fields
+are absent; a direct fresh AX field/kind comparison rejects changed keys before
+assignment or effective membership. These are exact process-bound choices, not
+a claim that tooltips are stable identifiers. Capture/activation/movement retain
+their separate original descriptor checks.
+
+The same UI check found one failed whole-inventory capture erased all row images
+and incorrectly suggested missing Screen Recording permission. Arrangement
+capture now retains successful images by original row index, reports individual
+errors and counts, and suggests permission access only when its preflight check
+actually fails. Unsupported system captures remain a parity requirement.
+
+The foreign-order repair after v4 was independently verified with live labels
+and a menu-region image. Rollback now tracks only moved foreign items, and the
+application waits for applying/recovery work to become idle before reapplying.
+Native validation of the updated arbitrary-partition backend remains required.
+
+The next installed UI run initially timed out. A live process sample showed
+capture AX reads re-entering AppKit table drawing, whose section pickers then
+performed further synchronous live AX reads. Table rendering and selection
+now use captured snapshot matching; strict live checks remain at assignment
+and backend boundaries. After a fresh successful build, the installed window
+responded promptly, loaded 13 of 18 images, reported five captures unavailable
+for missing process identity, and enabled the Stats section selectors. Choosing
+CPU Visible wrote `["eu.exelban.Stats","help","CPU: Mini"] = visible`;
+choosing Use App Setting removed that override and restored the displayed
+fallback. Temporary test choices were removed before closing. This verifies
+UI assignment/storage and partial capture, not native per-icon hiding or
+automatic persistence across owner-app restarts.
+
+Read-only kernel process-start checks subsequently verified full public
+`proc_pidinfo(PROC_PIDTBSDINFO)` records for SystemUIServer, Control Center,
+MenuBarAgent, and Stats; invalid/missing PIDs were rejected. Entries with a nil
+AppKit launch date can now capture an explicit kernel-start key, which is
+independently revalidated during identity comparison. Existing launch-date
+keys retain their format. This supplies owner-process lifetime evidence without
+claiming status-item lifetime isolation. System capture still requires native
+GUI verification, and system drag sources remain explicitly unsupported.
+
+The v6 native backend run exposed the requested target through native overflow,
+but dragging the divider to that expanded target collapsed overflow and did not
+establish the intended placement. The run verified restored foreign order and
+exposure after failure. The next algorithm places the divider at an already
+exposed boundary before moving preceding visible foreign icons to its right;
+its own control observation is bound to retained status-item objects. These
+changes are pending native verification, rather than a passing arbitrary
+partition result.
+
+The direct v10 test passed the reusable backend on Stats Disk: width 48,
+active/validated true, one exact Disk image captured through native overflow,
+collapsed-state restoration, retained real NookBar control, and restored foreign
+order/exposure and system regions. Independent review of before/hidden/restored
+menu-region images found the narrow blue Disk icon absent while hidden and
+present again afterward, with CPU/RAM visible. This verifies this concrete
+partition on the built-in display, not all app/display/lifecycle combinations.
+Saved public assignments and mixed legacy app selections remain the next
+integration checks; app-default hiding must not demand a per-icon key from
+otherwise unidentifiable icons, nor relax matching for mixed per-icon choices.
 
 ## Foreign same-app divider follow-up (October 11)
 
@@ -453,3 +525,144 @@ discovery, capture, foreign hiding/restoration, and removal/rename checks passed
 `liveEntriesResolvable` remained false and same-label replacement isolation
 remained unproven. Dynamic descriptions still require refreshed captures; this
 follow-up does not relax the activation guard or claim dynamic refresh is solved.
+
+## Persistent physical sections proposal (source research, October 11)
+
+Legacy Ice's independent sections are defined by physical item positions around
+persistent owned controls, rather than by a database that reidentifies each
+foreign item after its process restarts. In the local `Ice2-reference` source,
+`MenuBarItemManager.swift:319–334` classifies an item's current bounds as Visible
+when right of the Hidden control, Hidden when between the Hidden and Always
+Hidden controls, and Always Hidden when left of the Always Hidden control.
+`ControlItem.swift:79–84` creates each control with a stable `autosaveName` equal
+to its identifier. Its comments at lines 87–93 explicitly explain that the
+controls must remain present because their positions define section membership.
+
+That source also preserves a control's `NSStatusItem Preferred Position` value
+around removal (`ControlItem.swift:110–115` and `453–456`). Its preflight setup at
+lines 687–708 seeds preferred position and visibility defaults only when absent.
+These are source observations, not proof that macOS 27 honors those legacy keys
+in every layout. Earlier NookBar movement checks showed native L/R order
+persisting while the legacy preferred-position numbers did not reflect that
+order. Actual restored control and icon geometry must remain the acceptance
+criterion; writing or reading a preference is insufficient.
+
+Ice's semantic tag is namespace plus CGWindow title
+(`MenuBarItem.swift:325–337`). The namespace prefers a source app's bundle ID
+at lines 374–376, or owner bundle/process name at lines 358–362 and 392–397.
+The unknown-owner fallback caches a UUID by CGWindowID in memory at lines 344
+and 400–406, so it supplies no restart-stable identity. Public window metadata
+includes `kCGWindowName` and owner PID (`WindowInfo.swift:50–60`), but this older
+item inventory also calls the bridging window-list/geometry path. A unique AX
+item to CGWindow mapping on macOS 27 has not been established. The macOS 27
+native fork maps ordinary items to `bundle:<bundle>`
+(`NativeMenuBarPolicy.swift:50–60`), which also does not solve independent
+same-app persistent identity. The rejected entitled utilities connection is
+not a usable way to acquire stronger item identifiers.
+
+A scoped implementation should therefore preserve physical sections directly:
+
+1. Keep two named owned boundary items present while their sections are enabled,
+   with fixed distinct autosave names and a contracted, discoverable width.
+   Retain NookBar's existing control on the visible side. Initialize default
+   positions only for a genuinely new configuration. Never rewrite saved
+   positions on every launch or remove/recreate controls on each hide/reveal.
+   Preserve owned control preference values when intentional teardown requires
+   removal, and verify restoration from live geometry after startup settles.
+2. Derive membership from a fresh contracted inventory and the two live boundary
+   frames. Require uniquely resolved, exposed item identities and correct
+   boundary order; crossing or overlapping frames are unresolved. Dynamic labels
+   are display text, not saved item IDs. Once layout is established, hide and
+   reveal by changing the appropriate boundary widths without repartitioning or
+   moving foreign icons on every refresh. Keep the bounded width/protected-item,
+   recovery, and ownership guards already being verified by the divider backend.
+3. Moving an icon to another section performs one validated native movement
+   across the appropriate boundary and verifies its resulting physical region.
+   Moving an app's current icons is an explicit group operation, rather than a
+   continuing app assertion that can override later individual placement.
+   Temporary single-icon reveal records and restores its native return position
+   with the current identity guard; it does not persist a runtime identity.
+4. Treat existing app assignments as a one-time migration plan for the currently
+   resolved live inventory. Apply current valid per-icon choices over those app
+   defaults, then establish the resulting physical partition using native
+   moves. Keep the old preferences available until every planned move and the
+   boundary layout have been verified. Missing apps, duplicate identities,
+   stale process-bound overrides, or failed restoration leave migration pending
+   and the affected items visible. Mark migration complete only after the
+   contracted layout proves the requested regions; thereafter the physical
+   boundaries govern membership, and legacy defaults must not continuously
+   move user-arranged icons back. A later explicit app assignment expands to a
+   fresh live group operation. Do not infer completion merely from launching
+   NookBar or successfully writing an autosave preference.
+
+This design avoids matching a newly created runtime item against an old dynamic
+label. It does not guarantee that every foreign app saves its own status-item
+position: an app that recreates or repositions its icons may change their
+physical section. Verify, separately, NookBar relaunch, independent Stats
+relaunch, changing Stats display styles/help, one icon disappearing/reappearing,
+boundary removal/recreation, and display/Space transitions. The desired evidence
+is each actual icon's physical region, not equal labels or equal AX references.
+Use controlled fixtures for duplicates and items with no primary descriptor.
+Stats' current `CPU: Mini`, `Disk: Bar chart`, and `RAM: Mini` values were observed
+only as AXHelp. Their exact process-bound choices remain useful for initial
+explicit arrangement but are not promoted to restart-stable IDs.
+
+No persistent-boundary implementation or target-app restart experiment was
+performed by this source-research addition. Same-process remove/recreate AX
+identity reuse remains an unresolved item-lifetime limit.
+
+## Saved public assignment with legacy app defaults (October 11)
+
+On the signed installed app, the public Arrange Icons picker assigned Stats'
+`Disk: Bar chart` to Hidden. Closing that window applied the saved choice along
+with the seven existing app-wide Hidden defaults: BetterDisplay, Macs Fan
+Control, Jump Desktop Connect, Wispr Flow, Chrome, Tailscale, and ChatGPT.
+
+The interaction trace recorded `hidingCompleted`, `dividerActive: true`, width
+312, `dividerBusy: false`, and `dividerStage: active`. An independent desktop
+snapshot showed the native overflow chevron collapsed and the seven app icons
+plus Disk absent from the rendered bar. NookBar's real tray, Xcode, TaskWise,
+Stats CPU and RAM, and the system extras remained visible. The hidden entries'
+AX centers clustered at x1160–1181 under the overflow control at x1186; CPU and
+RAM stayed separately located at x1661 and x1708.
+
+Evidence is retained under the local task's `outputs/` directory as
+`public-sections-interactions.ndjson`, `public-sections-visible.png`, and
+`public-sections-visible.txt`; `public-sections-before.plist` records the original
+defaults without per-icon choices. The initially missing trace appeared after
+hiding completed. A NookBar CUA accessibility read timed out, while the independent
+desktop snapshot returned in about one second; these observations do not
+establish a permanently hung application. Test-choice cleanup was handed back
+to the primary agent after that timeout, without overwriting the app defaults.
+
+This verifies one saved public Hidden assignment combined with existing app
+defaults on the built-in display. Always Hidden, selective activation/reveal,
+persistent physical boundaries, target-app restarts, other displays and general
+interruption recovery remain separate requirements.
+
+The primary agent then relaunched Arrange Icons and selected Use App Setting
+(Visible) for Disk through its actual popup. The `IconSections` and
+`IconSectionProcesses` keys were removed. Comparing exported defaults with the
+pre-test plist confirmed exact restoration of both per-icon keys, `HiddenApps`,
+and `AlwaysHiddenApps`. The combined build, signature, diagnostic, and behavior
+checks passed after the display-context fix was corrected for Swift concurrency.
+
+The subsequent `--persistent-boundaries-check --initialize-boundaries` v2 test
+failed to place the new Hidden marker before the automatically selected Clock
+anchor. Both cycles reported rejected movement, removed the new markers, and
+independently confirmed foreign identity/order/exposure and native overflow
+restoration. The pre-move observation had overflow expanded, Hidden at x865,
+Always Hidden at x825, and Clock at x1958.5. This narrows the next placement test
+to its anchor/overflow transition; it does not prove a general drag restriction.
+Evidence: local `outputs/persistent-boundaries-v2.json`. Normal NookBar was
+relaunched after testing; persistent section initialization remains unverified.
+
+The v3 repeat used the explicit `--boundary-anchor TaskWise` diagnostic option.
+The first cycle moved Hidden and Always Hidden successfully, producing exposed
+ordered markers at x1571 and x1531. The second cycle reported only `restored
+valid contracted markers`, with identical positions and no additional drag.
+Both cycles independently passed foreign order/exposure/overflow restoration
+after marker removal. This verifies initial placement and recreation for that
+anchor on the built-in display. It does not establish normal migration, hiding
+widths, independent target-app restart persistence, or safe section treatment
+of system/NookBar controls. Evidence: `outputs/persistent-boundaries-v3.json`.

@@ -53,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var accessibilityItem: NSMenuItem?
     private let visibility = NBVisibilityController()
     private let sections = AppSections()
+    private let iconDivider = IconDivider()
+    private var hasSelection: Bool { !selected.isEmpty || sections.hasIconAssignments }
     private var selected: Set<String> { sections.tucked }
     private var presentedSection: AppSections.Section = .hidden
     private var apps: [(bundle: String, name: String)] = []
@@ -62,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var accessButton: NSButton?
     private var toggleItem: NSMenuItem?
     private var isPending = false
+    private var waitingToQuit = false
     private var operation = 0
     private var monitor: Timer?
     private var runningBundles = Set<String>()
@@ -110,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.autosaveName = "NookBar.Control"
         item.button?.image = NSImage(systemSymbolName: "tray", accessibilityDescription: "NookBar")
         item.button?.image?.isTemplate = true
+        item.button?.setAccessibilityLabel("NookBar control")
         item.button?.toolTip = "NookBar — click for hidden icons; right-click for settings"
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -171,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 spacingProbeItems.append(probe)
             }
         }
-        hiddenBar.onSelect = { [weak self] icon in self?.openHiddenIcon(icon) }
+        hiddenBar.onSelect = { [weak self] icon, screen in self?.openHiddenIcon(icon, screen: screen) }
         hiddenBar.isControlWindow = { [weak self] window in
             guard let self else { return false }
             return window === self.controlPanel || window === self.statusItem?.button?.window
@@ -182,6 +186,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if CommandLine.arguments.contains("--self-test") {
             Task { await self.runSelfTest() }
+            return
+        }
+        if CommandLine.arguments.contains("--persistent-boundaries-check") {
+            Task { await self.runPersistentBoundariesCheck() }
+            return
+        }
+        if CommandLine.arguments.contains("--status-window-capture-check") {
+            Task { await self.runStatusWindowCaptureCheck() }
+            return
+        }
+        if CommandLine.arguments.contains("--menu-bar-surfaces-check") {
+            Task { await self.runMenuBarSurfacesCheck() }
             return
         }
         if CommandLine.arguments.contains("--overflow-check") {
@@ -250,6 +266,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             arrangingIcons = false
             if visibilityRequested { hideSelectedApps() }
         }
+        arrangementWindow.sections = sections
+        arrangementWindow.sectionApplicationNote = "Saved assignments apply the next time icons are hidden. Changed or ambiguous icons remain visible until confirmed."
+        arrangementWindow.onAssignIcon = { [weak self] entry, section, inventory in
+            guard let self else { return "NookBar is no longer available." }
+            if let issue = self.sections.iconAssignmentIssue(for: entry, among: inventory) { return issue }
+            guard self.sections.assignIcon(entry, among: inventory, to: section) else {
+                return "This icon changed. Refresh before assigning its section."
+            }
+            return nil
+        }
         spacing.onBeginRelaunch = { [weak self] in
             guard let self, !isPending, !arrangingIcons, temporaryBundle == nil else { return false }
             relaunchingMenuApps = true
@@ -289,7 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             MainActor.assumeIsolated {
                 guard let self, !self.relaunchingMenuApps else { return }
                 let bundles = self.currentBundles()
-                if (self.visibility.active || self.isPending) && !AXIsProcessTrusted() {
+                if (self.visibility.active || self.iconDivider.active || self.isPending) && !AXIsProcessTrusted() {
                     self.restore(message: "Apps restored because Accessibility access was removed.")
                 } else if bundles != self.runningBundles && self.visibilityRequested && !self.isPending && !self.arrangingIcons {
                     if self.temporaryBundle != nil && self.temporaryInterfaceIsOpen() {
@@ -300,6 +326,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 self.runningBundles = bundles
                 if self.visibility.active { self.ensureControl() }
+                if self.iconDivider.active, !self.isPending, self.temporaryBundle == nil,
+                   !self.iconDivider.validate() {
+                    self.restore(message: "The menu bar layout changed. Icons were restored; hide them again after the layout settles.")
+                }
             }
         }
         behaviorTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
@@ -308,9 +338,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.refreshDisplayedIcons()
             }
         }
-        if selected.isEmpty || CommandLine.arguments.contains("--choose-apps") { chooseApps() }
+        if !hasSelection || CommandLine.arguments.contains("--choose-apps") { chooseApps() }
         if ["--settings", "--appearance", "--spacing"].contains(where: CommandLine.arguments.contains),
-           preferences.enabled(.hideOnLaunch), !selected.isEmpty {
+           preferences.enabled(.hideOnLaunch), hasSelection {
             visibilityRequested = true
             resumeVisibility()
         }
@@ -318,16 +348,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         else if CommandLine.arguments.contains("--appearance") { showAppearance() }
         else if CommandLine.arguments.contains("--spacing") { openPreferences(tab: "Spacing") }
         else if CommandLine.arguments.contains("--arrange-icons") {
-            visibilityRequested = preferences.enabled(.hideOnLaunch) && !selected.isEmpty
+            visibilityRequested = preferences.enabled(.hideOnLaunch) && hasSelection
             showArrangement()
         }
         else if CommandLine.arguments.contains("--search") { showIconSearch() }
         else if CommandLine.arguments.contains("--show-bar") {
             Task { try? await Task.sleep(for: .milliseconds(500)); showHiddenBar() }
-        } else if preferences.enabled(.hideOnLaunch), !selected.isEmpty,
+        } else if preferences.enabled(.hideOnLaunch), hasSelection,
                   !CommandLine.arguments.contains("--choose-apps") {
             visibilityRequested = true
             resumeVisibility()
+        }
+    }
+
+    private func runMenuBarSurfacesCheck() async {
+        guard let screen = NSScreen.screens.first,
+              let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1) else { return }
+        let result = await StatusWindowCapture.captureMenuBarAgentSurfaces(screen: screen)
+        let reportURL = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+        do {
+            let data = try JSONSerialization.data(withJSONObject: result.report, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: reportURL)
+            for (id, image) in result.images {
+                if let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
+                    let name = reportURL.deletingPathExtension().lastPathComponent + "-surface-\(id).png"
+                    try png.write(to: reportURL.deletingLastPathComponent().appendingPathComponent(name))
+                }
+            }
+        } catch { NSLog("Menu bar surface report failed: %@", error.localizedDescription) }
+    }
+
+    private func runStatusWindowCaptureCheck() async {
+        guard let item = statusItem, let screen = item.button?.window?.screen ?? NSScreen.screens.first else { return }
+        try? await Task.sleep(for: .seconds(1))
+        let result = await StatusWindowCapture.captureOwnedStatusItem(item, screen: screen)
+        guard let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
+              let data = try? JSONSerialization.data(withJSONObject: result.report, options: [.prettyPrinted, .sortedKeys]) else { return }
+        let reportURL = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+        do {
+            try data.write(to: reportURL)
+            if let image = result.image,
+               let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
+                try png.write(to: reportURL.deletingPathExtension().appendingPathExtension("png"))
+            }
+        } catch { NSLog("Status window capture report failed: %@", error.localizedDescription) }
+    }
+
+    private func runPersistentBoundariesCheck() async {
+        let boundaries = PersistentSectionBoundaries()
+        let defaults = UserDefaults.standard
+        let keys = PersistentSectionBoundaries.Boundary.allCases.flatMap { boundary in
+            ["Preferred Position", "Visible", "VisibleCC"].map { "NSStatusItem \($0) \(boundary.autosaveName)" }
+        }
+        let original = keys.map { ($0, defaults.object(forKey: $0)) }
+        var report: [String: Any] = ["diagnostic": "persistent-boundaries", "parityVerified": false]
+        defer {
+            boundaries.dispose()
+            for (key, value) in original {
+                if let value { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+        }
+        do {
+            guard AXIsProcessTrusted(), let screen = NSScreen.screens.first else { throw PersistentSectionBoundaries.Failure.unavailable }
+            let frame = HiddenBar.captureFrame(for: screen)
+            var cycles: [[String: Any]] = []
+            for cycle in 0..<2 {
+                boundaries.createIfNeeded()
+                var initializationError: String?
+                if CommandLine.arguments.contains("--initialize-boundaries") {
+                    do {
+                        var anchor: NBMenuBarEntry?
+                        if let index = CommandLine.arguments.firstIndex(of: "--boundary-anchor"), CommandLine.arguments.indices.contains(index + 1) {
+                            let label = CommandLine.arguments[index + 1]
+                            let matches = NBMenuBarEntries(frame).filter { $0.label == label && NBMenuBarEntryIsExposed($0) }
+                            guard matches.count == 1 else { throw PersistentSectionBoundaries.Failure.unavailable }
+                            anchor = matches[0]
+                        }
+                        _ = try await boundaries.initializeNewLayout(on: screen, anchor: anchor)
+                    }
+                    catch { initializationError = error.localizedDescription }
+                }
+                try await Task.sleep(for: .seconds(2))
+                let entries = NBMenuBarEntries(frame)
+                var observation: [String: Any] = ["cycle": cycle]
+                observation["initializationError"] = initializationError.map { $0 as Any } ?? NSNull()
+                observation["initializationObservations"] = boundaries.initializationObservations
+                observation["controls"] = entries.filter { entry in
+                    PersistentSectionBoundaries.Boundary.allCases.contains { $0.label == entry.label }
+                }.map { entry in
+                    ["label": entry.label, "x": entry.frame.minX, "width": entry.frame.width,
+                     "exposed": NBMenuBarEntryIsExposed(entry)] as [String: Any]
+                }
+                do {
+                    let layout = try boundaries.readLayout(in: entries, screenFrame: frame)
+                    observation["layoutValid"] = true
+                    observation["unresolvedCount"] = layout.unresolved.count
+                    observation["sections"] = Dictionary(uniqueKeysWithValues: layout.sections.map { ($0.key.rawValue, $0.value.map(\.label)) })
+                } catch {
+                    observation["layoutValid"] = false
+                    observation["layoutError"] = error.localizedDescription
+                }
+                boundaries.dispose()
+                try await Task.sleep(for: .milliseconds(500))
+                let restoration = boundaries.observeForeignRestoration(on: screen)
+                observation["foreignRestorationPassed"] = restoration.passed
+                observation["foreignRestorationFailures"] = restoration.failedLabels
+                cycles.append(observation)
+            }
+            report["cycles"] = cycles
+        } catch { report["error"] = error.localizedDescription }
+        if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
+           let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+            do { try data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1])) }
+            catch { NSLog("Persistent boundary report failed: %@", error.localizedDescription) }
         }
     }
 
@@ -335,8 +469,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let trusted = AXIsProcessTrusted()
         accessibilityItem?.title = trusted ? "Accessibility Access Granted" : "Request Accessibility Access…"
         accessibilityItem?.isEnabled = !trusted
-        toggleItem?.title = visibility.active ? "Show Hidden Apps" : "Hide Selected Apps (\(selected.count))"
-        toggleItem?.isEnabled = visibility.active || (trusted && !selected.isEmpty && !isPending)
+        toggleItem?.title = (visibility.active || iconDivider.active) ? "Show Hidden Icons" : "Hide Selected Icons"
+        toggleItem?.isEnabled = visibility.active || iconDivider.active || (trusted && hasSelection && !isPending)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -389,6 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         controlPanel?.orderOut(nil)
         controlPanel = nil
         visibility.restore()
+        iconDivider.restore()
         isPending = false
         setStatus(message)
     }
@@ -396,7 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAll() { restore(message: "All apps are shown.") }
 
     @objc private func showArrangement() {
-        guard !relaunchingMenuApps else { return }
+        guard !waitingToQuit, !relaunchingMenuApps else { return }
         guard dismissTemporaryMenu() else { return }
         arrangingIcons = true
         restore(message: "All icons are visible while arranging.", clearIntent: false)
@@ -465,8 +600,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func revealNativeSection(_ section: AppSections.Section) {
-        guard !isPending else { return }
-        guard !selected.isEmpty else { chooseApps(); return }
+        guard !waitingToQuit, !isPending else { return }
+        guard hasSelection else { chooseApps(); return }
         guard AXIsProcessTrusted() else { requestAccessibility(); return }
         guard dismissTemporaryMenu() else { return }
         visibilityRequested = true
@@ -475,7 +610,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let remaining = section == .alwaysHidden ? Set<String>() : sections.alwaysHidden.intersection(currentBundles())
         isPending = true
         Task {
-            let error = remaining.isEmpty ? nil : await activate(Array(remaining))
+            let error: String?
+            guard generation == operation else { return }
+            if sections.hasIconAssignments, section == .hidden {
+                guard let (_, screen) = barAnchor() else { restore(message: "The menu bar display is unavailable."); return }
+                error = await applyIconSections(screen: screen, hidingOnly: .alwaysHidden, expectedOperation: generation)
+            } else { error = remaining.isEmpty ? nil : await activate(Array(remaining), expectedOperation: generation) }
             guard generation == operation else { return }
             isPending = false
             if let error { restore(message: error); return }
@@ -500,7 +640,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let record: [String: Any] = ["stage": stage, "result": result.map { $0 as Any } ?? NSNull(),
             "bundle": temporaryBundle.map { $0 as Any } ?? NSNull(), "pending": isPending,
             "beforeWindows": temporaryInterface?.windows ?? [], "window": temporaryInterface?.window.map { $0 as Any } ?? NSNull(),
-            "interfaceOpen": temporaryInterfaceIsOpen(), "visibilityActive": visibility.active]
+            "interfaceOpen": temporaryInterfaceIsOpen(), "visibilityActive": visibility.active,
+            "dividerActive": iconDivider.active, "dividerWidth": iconDivider.width,
+            "dividerBusy": iconDivider.isBusy, "dividerStage": iconDivider.stage]
         guard var data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) else { return }
         data.append(10)
         let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
@@ -589,7 +731,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func resumeVisibility() {
-        guard !arrangingIcons, visibilityRequested else { return }
+        guard !waitingToQuit, !arrangingIcons, visibilityRequested else { return }
         restore(message: "Refreshing menu bar visibility…", clearIntent: false)
         let generation = operation
         Task {
@@ -615,7 +757,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let panel = controlPanel, panel.isVisible, let screen = panel.screen { return (panel.frame, screen) }
         guard let button = statusItem?.button, let window = button.window, let screen = window.screen else { return nil }
         let own = Bundle.main.bundleIdentifier ?? "com.codenest.nookbar"
-        if let entry = NBMenuBarEntries(HiddenBar.captureFrame(for: screen)).first(where: { $0.bundle == own }) {
+        if let entry = NBMenuBarEntries(HiddenBar.captureFrame(for: screen)).first(where: { $0.bundle == own && $0.label == "NookBar control" && NBMenuBarEntryIsExposed($0) }) {
             let top = NSScreen.screens.first?.frame.maxY ?? screen.frame.maxY
             let frame = NSRect(x: entry.frame.minX, y: top - entry.frame.maxY, width: entry.frame.width, height: entry.frame.height)
             return (frame, screen)
@@ -677,6 +819,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAlwaysHidden() { togglePresentation(section: .alwaysHidden) }
 
     private func presentBar(searching: Bool, section: AppSections.Section = .hidden) {
+        guard !waitingToQuit else { return }
         if arrangingIcons { arrangementWindow.show(); return }
         if temporaryBundle != nil {
             guard !isPending, dismissTemporaryMenu() else { return }
@@ -686,7 +829,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !isPending, let (anchor, screen) = presentationAnchor() else { return }
         requestedBarAnchor = nil
         guard AXIsProcessTrusted() else { requestAccessibility(); return }
-        guard searching || !sections.bundles(in: section).isEmpty else {
+        guard searching || sections.hasIconAssignments || !sections.bundles(in: section).isEmpty else {
             chooseApps()
             setStatus("Assign an app to the \(section.title) section first.")
             return
@@ -703,25 +846,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
-        visibilityRequested = !selected.isEmpty
+        visibilityRequested = hasSelection
         // Restore for one fresh capture, then hide again before displaying the strip.
         restore(message: "Loading menu bar icons…", clearIntent: false)
         let generation = operation
         isPending = true
         let targets = selected.intersection(currentBundles())
-        let captureTargets = searching ? Set(currentBundles().filter { !$0.hasPrefix("com.apple.") && $0 != Bundle.main.bundleIdentifier }) : targets
+        let captureTargets = (searching || sections.hasIconAssignments) ? Set(currentBundles().filter { !$0.hasPrefix("com.apple.") && $0 != Bundle.main.bundleIdentifier }) : targets
         Task {
             do {
                 try await Task.sleep(for: .milliseconds(250))
                 let icons = try await HiddenBar.capture(bundles: captureTargets, screen: screen)
                 guard generation == operation else { return }
-                let error = targets.isEmpty ? nil : await activate(Array(targets))
+                let error = targets.isEmpty && !sections.hasIconAssignments ? nil : await activate(Array(targets), expectedOperation: generation, screen: screen)
                 guard generation == operation else { return }
                 isPending = false
                 if let error { restore(message: error); return }
                 lastIconRefresh = Date()
                 presentedSection = section
-                let shown = searching ? icons : icons.filter { sections.bundles(in: section).contains($0.bundle) }
+                let shown = searching ? icons : icons.filter { icon in
+                    if sections.hasIconAssignments, let entry = icon.entry { return sections.section(for: entry, among: icons.compactMap(\.entry)) == section }
+                    return sections.bundles(in: section).contains(icon.bundle)
+                }
                 guard !shown.isEmpty else { throw HiddenBar.BarError.noIcons }
                 presentationStarted = Date()
                 pointerEnteredPresentation = pointerInMenuBar(NSEvent.mouseLocation)
@@ -740,30 +886,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshDisplayedIcons() {
-        guard hiddenBar.isVisible, let screen = hiddenBar.screen, !isPending, !arrangingIcons,
+        guard !waitingToQuit, hiddenBar.isVisible, let screen = hiddenBar.screen, !isPending, !arrangingIcons,
               !relaunchingMenuApps, temporaryBundle == nil, NSEvent.pressedMouseButtons == 0,
               Date().timeIntervalSince(lastIconRefresh) >= 3 else { return }
         lastIconRefresh = Date()
         let searching = hiddenBar.isSearching
         let section = presentedSection
         let targets = selected.intersection(currentBundles())
-        let bundles = searching ? Set(currentBundles().filter { !$0.hasPrefix("com.apple.") && $0 != Bundle.main.bundleIdentifier }) : targets
+        let bundles = (searching || sections.hasIconAssignments) ? Set(currentBundles().filter { !$0.hasPrefix("com.apple.") && $0 != Bundle.main.bundleIdentifier }) : targets
         operation += 1
         let generation = operation
         isPending = true
         visibility.restore()
+        iconDivider.restore()
         iconRefreshTask = Task { [self] in
             defer { if generation == operation { iconRefreshTask = nil; isPending = false } }
             do {
                 try await Task.sleep(for: .milliseconds(250))
                 let icons = try await HiddenBar.capture(bundles: bundles, screen: screen)
                 guard generation == operation, !Task.isCancelled else { return }
-                if !targets.isEmpty, let error = await activate(Array(targets)) {
+                if (!targets.isEmpty || sections.hasIconAssignments), let error = await activate(Array(targets), expectedOperation: generation, screen: screen) {
                     guard generation == operation else { return }
                     restore(message: error); return
                 }
                 guard generation == operation, !Task.isCancelled else { return }
-                let shown = searching ? icons : icons.filter { sections.bundles(in: section).contains($0.bundle) }
+                let shown = searching ? icons : icons.filter { icon in
+                    if sections.hasIconAssignments, let entry = icon.entry { return sections.section(for: entry, among: icons.compactMap(\.entry)) == section }
+                    return sections.bundles(in: section).contains(icon.bundle)
+                }
                 guard !shown.isEmpty else { throw HiddenBar.BarError.noIcons }
                 if hiddenBar.isVisible { hiddenBar.update(icons: shown) }
             } catch {
@@ -773,14 +923,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func openHiddenIcon(_ icon: HiddenBar.Icon) {
+    private func openHiddenIcon(_ icon: HiddenBar.Icon, screen sourceScreen: NSScreen? = nil) {
+        let cancelledRefresh = iconRefreshTask
         if iconRefreshTask != nil {
             iconRefreshTask?.cancel(); iconRefreshTask = nil
             HiddenBar.restoreOverflow()
             isPending = false
         }
         guard !isPending else { return }
-        guard let entry = icon.entry, let (_, screen) = barAnchor() else { showAll(); return }
+        guard let entry = icon.entry, let screen = sourceScreen ?? barAnchor()?.1 else { showAll(); return }
         operation += 1
         let generation = operation
         presentationStarted = nil
@@ -790,15 +941,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         isPending = true
         let remaining = selected.intersection(currentBundles()).subtracting([icon.bundle])
         Task { [self] in
+            await cancelledRefresh?.value
+            guard generation == operation else { return }
+            guard NBMenuBarEntryActivationLabelIsCurrent(entry) else {
+                restore(message: "This icon changed. Reopen the strip before trying again."); return
+            }
             let error: String?
-            if remaining.isEmpty { visibility.restore(); error = nil }
-            else { error = await activate(Array(remaining)) }
+            if remaining.isEmpty && !sections.hasIconAssignments { visibility.restore(); error = nil }
+            else { error = await activate(Array(remaining), expectedOperation: generation, excluding: entry, screen: screen) }
             guard generation == operation else { return }
             try? await Task.sleep(for: .milliseconds(300))
             guard generation == operation else { return }
             if let error { restore(message: error); return }
+            guard NBMenuBarEntryActivationLabelIsCurrent(entry) else {
+                restore(message: "This icon changed. Reopen the strip before trying again."); return
+            }
             let opened = await HiddenBar.press(entry: entry, screen: screen) { current in
-                guard generation == self.operation, let windows = NBMenuBarInterfaceWindowIDs(current) else { return false }
+                guard generation == self.operation, NBMenuBarEntryActivationLabelIsCurrent(entry),
+                      let windows = NBMenuBarInterfaceWindowIDs(current) else { return false }
                 // Snapshot after revealing/expanding the item, immediately
                 // before its action, so exposure windows are not its interface.
                 self.temporaryInterface = (current, windows, nil)
@@ -822,6 +982,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             recordInteraction("interfaceCaptured")
             isPending = false
             temporaryRehideCheckAt = ProcessInfo.processInfo.systemUptime + preferences.tempShowInterval
+            let rehideDisplayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
             menuWatch = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, generation == self.operation else { return }
@@ -843,13 +1004,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.temporaryBundle = nil
                     self.temporaryInterface = nil
                     HiddenBar.restoreOverflow()
-                    self.hideSelectedApps()
+                    let rehideScreen = NSScreen.screens.first {
+                        ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == rehideDisplayID
+                    }
+                    guard let rehideScreen else {
+                        self.restore(message: "The source display is no longer available. Icons were restored.")
+                        return
+                    }
+                    self.hideSelectedApps(screen: rehideScreen)
                 }
             }
         }
     }
 
-    private func activate(_ bundles: [String]) async -> String? {
+    private func activate(_ bundles: [String], expectedOperation: Int? = nil, excluding entry: NBMenuBarEntry? = nil, screen sourceScreen: NSScreen? = nil) async -> String? {
+        guard !waitingToQuit else { return "NookBar is quitting." }
+        let request = expectedOperation ?? operation
+        guard request == operation, !Task.isCancelled else { return "Icon hiding was cancelled." }
+        if sections.hasIconAssignments {
+            guard let screen = sourceScreen ?? barAnchor()?.1 else { return "The menu bar display is unavailable." }
+            let displayKey = NSDeviceDescriptionKey("NSScreenNumber")
+            guard let displayID = screen.deviceDescription[displayKey] as? NSNumber,
+                  NSScreen.screens.contains(where: { $0.deviceDescription[displayKey] as? NSNumber == displayID }) else {
+                return "The source display is no longer available. Reopen the strip on an available display."
+            }
+            return await applyIconSections(screen: screen, expectedOperation: request, excluding: entry)
+        }
         runningBundles = currentBundles()
         if let anchor = barAnchor() { nativeControlAnchor = anchor }
         return await withCheckedContinuation { continuation in
@@ -859,18 +1039,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func applyIconSections(screen: NSScreen, hidingOnly section: AppSections.Section? = nil, expectedOperation request: Int, excluding exception: NBMenuBarEntry? = nil) async -> String? {
+        guard request == operation, !Task.isCancelled else { return "Icon hiding was cancelled." }
+        do { try await iconDivider.waitUntilIdle() }
+        catch { return error.localizedDescription }
+        guard request == operation, !Task.isCancelled else { return "Icon hiding was cancelled." }
+        visibility.restore()
+        iconDivider.restore()
+        do {
+            try await Task.sleep(for: .milliseconds(500))
+            guard request == operation, !Task.isCancelled else { return "Icon hiding was cancelled." }
+            let entries = NBMenuBarEntries(HiddenBar.captureFrame(for: screen))
+            if let exception, (!NBMenuBarEntryActivationLabelIsCurrent(exception) ||
+                entries.filter({ NBSameMenuBarEntryDescriptor($0, exception) }).count != 1) {
+                return "This icon changed. Reopen the strip before trying again."
+            }
+            let hidden = entries.filter { entry in
+                if let exception, NBSameMenuBarEntryDescriptor(entry, exception) { return false }
+                let assigned = sections.section(for: entry, among: entries)
+                return section.map { assigned == $0 } ?? (assigned != .visible)
+            }
+            guard !hidden.isEmpty else { return nil }
+            let visible = entries.filter { entry in !hidden.contains { NBSameMenuBarEntryDescriptor($0, entry) } }
+            let appFallback = Set(hidden.map(\.bundle)).filter {
+                !sections.hasIconAssignments(for: $0) && sections.section(for: $0) != .visible
+            }
+            try await iconDivider.hide(hidden: hidden, visible: visible, screen: screen,
+                                       ownedControls: [statusItem].compactMap { $0 }, appFallbackBundles: appFallback)
+            guard request == operation, !Task.isCancelled else { return "Icon hiding was cancelled." }
+            return nil
+        } catch {
+            if request == operation { iconDivider.restore() }
+            return error.localizedDescription
+        }
+    }
+
     @objc private func toggleVisibility() {
-        if visibility.active || isPending { showAll(); return }
+        if visibility.active || iconDivider.active || isPending { showAll(); return }
         hideSelectedApps()
     }
 
-    private func hideSelectedApps(then completion: (() -> Void)? = nil) {
-        guard !arrangingIcons, !isPending, !relaunchingMenuApps else { return }
+    private func hideSelectedApps(screen sourceScreen: NSScreen? = nil, then completion: (() -> Void)? = nil) {
+        guard !waitingToQuit, !arrangingIcons, !isPending, !relaunchingMenuApps else { return }
         HiddenBar.restoreOverflow()
         guard AXIsProcessTrusted() else { requestAccessibility(); return }
         let own = Bundle.main.bundleIdentifier ?? "com.codenest.nookbar"
         let targets = selected.intersection(currentBundles()).filter { $0 != own && !$0.hasPrefix("com.apple.") }
-        guard !targets.isEmpty else { showAll(); completion?(); return }
+        guard !targets.isEmpty || sections.hasIconAssignments else { showAll(); completion?(); return }
         visibilityRequested = true
         nativeItemsRevealed = false
         presentationStarted = nil
@@ -884,11 +1099,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         isPending = true
         setStatus("Hiding selected apps…")
         Task {
-            let error = await activate(Array(targets))
+            let error = await activate(Array(targets), expectedOperation: generation, screen: sourceScreen)
             guard generation == operation else { return }
             isPending = false
             if let error { restore(message: error); return }
-            setStatus("Selected apps are hidden. Click NookBar to open their icons; right-click for settings.")
+            if sections.hasIconAssignments && !iconDivider.active {
+                setStatus("Icons remain visible. Confirm changed assignments in Arrange Icons, then hide them again.")
+            } else {
+                setStatus("Selected icons are hidden. Click NookBar to open their icons; right-click for settings.")
+            }
+            recordInteraction("hidingCompleted", result: visibility.active || iconDivider.active)
             completion?()
             try? await Task.sleep(for: .seconds(1))
             if generation == operation { ensureControl() }
@@ -1029,6 +1249,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if spacing.isBusy { preferencesWindow.report("Wait until menu bar apps finish relaunching before quitting NookBar."); return .terminateCancel }
+        if waitingToQuit { return .terminateLater }
+        if iconDivider.isBusy {
+            waitingToQuit = true
+            restore(message: "Restoring icons before quitting…")
+            Task {
+                // Restore releases a live gesture immediately; allow its
+                // serialized order recovery to finish before AppKit exits.
+                do {
+                    try await iconDivider.waitUntilIdle()
+                    sender.reply(toApplicationShouldTerminate: true)
+                } catch {
+                    waitingToQuit = false
+                    let message = "Icon recovery is still pending. NookBar stayed open; wait for recovery before quitting again. \(error.localizedDescription)"
+                    setStatus(message)
+                    preferencesWindow.report(message)
+                    sender.reply(toApplicationShouldTerminate: false)
+                }
+            }
+            return .terminateLater
+        }
         return .terminateNow
     }
 
@@ -1049,6 +1289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         controlPanel?.orderOut(nil)
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         visibility.restore()
+        iconDivider.restore()
     }
 
     @objc private func probeClicked(_ sender: NSButton) { activatedProbe = sender.tag }
@@ -1133,7 +1374,139 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // Only our disposable divider moves. No foreign position or saved section is written.
+    private func runDirectDividerBackendCheck() async {
+        var report: [String: Any] = [:]
+        let backend = IconDivider()
+        if let screen = NSScreen.screens.first {
+            let frame = HiddenBar.captureFrame(for: screen)
+            let initialOverflow = NBMenuBarOverflowState(frame)
+            report["initialOverflow"] = initialOverflow
+            var original: [NBMenuBarEntry] = []
+            var systemObservations: [NBMenuBarEntry] = []
+            func captureStage(_ name: String, icon: NBMenuBarEntry? = nil) async throws {
+                guard let index = CommandLine.arguments.firstIndex(of: "--divider-capture-dir"), CommandLine.arguments.indices.contains(index + 1) else { return }
+                let directory = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                if let icon, !NBMenuBarEntryIsExposed(icon) { throw MenuBarMovement.Failure.changed }
+                let image = try await SCScreenshotManager.captureImage(in: CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: 40))
+                if let icon, !NBMenuBarEntryIsExposed(icon) { throw MenuBarMovement.Failure.changed }
+                try NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("\(name).png"))
+                if let icon {
+                    let scaleX = CGFloat(image.width) / frame.width, scaleY = CGFloat(image.height) / 40
+                    let region = CGRect(x: (icon.frame.minX - frame.minX) * scaleX, y: (icon.frame.minY - frame.minY) * scaleY,
+                                        width: icon.frame.width * scaleX, height: icon.frame.height * scaleY)
+                    guard let cropped = image.cropping(to: region) else { throw MenuBarMovement.Failure.geometry }
+                    try NSBitmapImageRep(cgImage: cropped).representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("disk-\(name).png"))
+                }
+            }
+            func saveIcon(_ name: String, _ icon: HiddenBar.Icon) throws {
+                guard let index = CommandLine.arguments.firstIndex(of: "--divider-capture-dir"), CommandLine.arguments.indices.contains(index + 1),
+                      let tiff = icon.image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+                      let png = bitmap.representation(using: .png, properties: [:]) else { return }
+                let directory = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try png.write(to: directory.appendingPathComponent("\(name).png"))
+            }
+            do {
+                try await Task.sleep(for: .seconds(2))
+                let entries = NBMenuBarEntries(frame)
+                original = entries.filter { $0.bundle != Bundle.main.bundleIdentifier && !$0.bundle.hasPrefix("com.apple.") && NBMenuBarEntryIsExposed($0) && NBSameMenuBarEntry($0, $0) }
+                systemObservations = entries.filter { $0.bundle != Bundle.main.bundleIdentifier && NBMenuBarEntryIsExposed($0) && ($0.bundle.hasPrefix("com.apple.") || !NBSameMenuBarEntry($0, $0)) }
+                report["beforeOrder"] = original.map(\.label)
+                let disks = entries.filter { $0.bundle == "eu.exelban.Stats" && $0.label == "Disk: Bar chart" }
+                let cpus = entries.filter { $0.bundle == "eu.exelban.Stats" && $0.label == "CPU: Mini" }
+                let controls = entries.filter { $0.label == "NookBar control" && $0.bundle == Bundle.main.bundleIdentifier }
+                guard disks.count == 1, cpus.count == 1, controls.count == 1, let statusItem else { throw MenuBarMovement.Failure.changed }
+                try await captureStage("before", icon: disks[0])
+                report["bundle"] = disks[0].bundle; report["leftLabel"] = disks[0].label; report["rightLabel"] = cpus[0].label
+                try await backend.hide(hidden: disks, visible: [cpus[0], controls[0]], screen: screen, ownedControls: [statusItem])
+                report["dividerBackendActive"] = backend.active
+                report["dividerBackendWidth"] = backend.width
+                report["dividerBackendValidated"] = backend.validate()
+                report["independentForeignHideObserved"] = backend.active
+                report["visibleControlPreserved"] = report["dividerBackendValidated"]
+                try await captureStage("hidden")
+                let captured = try await HiddenBar.capture(entries: disks, screen: screen)
+                let count = captured.count
+                if let hiddenIcon = captured.first { try saveIcon("disk-hidden", hiddenIcon) }
+                report["dividerBackendCaptureCount"] = count
+                report["hiddenForeignCaptureCount"] = count
+                report["captureRestoredCollapsed"] = NBMenuBarOverflowState(frame) == 0
+                try await backend.restoreArrangement()
+                report["dividerBackendRestored"] = !backend.active
+            } catch { report["error"] = error.localizedDescription }
+            report["dividerBackendObservations"] = backend.observations
+            backend.restore()
+            HiddenBar.restoreOverflow()
+            try? await Task.sleep(for: .seconds(2))
+            let restored = NBMenuBarEntries(frame)
+            let positions = original.map { entry in restored.indices.filter { NBSameMenuBarEntry(restored[$0], entry) } }
+            report["afterOrder"] = restored.filter { $0.bundle != Bundle.main.bundleIdentifier && !$0.bundle.hasPrefix("com.apple.") && NBMenuBarEntryIsExposed($0) }.map(\.label)
+            report["foreignOrderRestored"] = !original.isEmpty && positions.allSatisfy { $0.count == 1 }
+                && zip(positions, positions.dropFirst()).allSatisfy { $0[0] < $1[0] }
+            report["foreignExposureRestored"] = !original.isEmpty && original.allSatisfy { entry in
+                let resolved = restored.filter { NBSameMenuBarEntry($0, entry) }
+                return resolved.count == 1 && NBMenuBarEntryIsExposed(resolved[0])
+            }
+            report["foreignDescriptorsResolvable"] = original.allSatisfy { NBResolveMenuBarEntry($0, frame) != nil }
+            report["changedDescriptorLabels"] = original.filter { NBResolveMenuBarEntry($0, frame) == nil }.map(\.label)
+            report["systemRegionsRestored"] = systemObservations.allSatisfy { entry in
+                let point = CGPoint(x: entry.frame.midX, y: entry.frame.midY)
+                return restored.contains { $0.bundle == entry.bundle && $0.label == entry.label && NBMenuBarEntryMatchesPoint($0, point) && NBMenuBarEntryIsExposed($0) }
+            }
+            report["systemObservationFrames"] = systemObservations.map { entry in
+                ["label": entry.label, "beforeX": entry.frame.minX, "beforeWidth": entry.frame.width,
+                 "after": restored.filter { $0.bundle == entry.bundle && $0.label == entry.label && NBMenuBarEntryIsExposed($0) }.map { ["x": $0.frame.minX, "width": $0.frame.width] }] as [String: Any]
+            }
+            report["finalOverflow"] = NBMenuBarOverflowState(frame)
+            do { try await captureStage("restored") }
+            catch { report["restorationCaptureError"] = error.localizedDescription }
+            report["passed"] = report["dividerBackendActive"] as? Bool == true && report["dividerBackendValidated"] as? Bool == true
+                && report["hiddenForeignCaptureCount"] as? Int == 1 && report["captureRestoredCollapsed"] as? Bool == true
+                && report["dividerBackendRestored"] as? Bool == true && report["foreignOrderRestored"] as? Bool == true
+                && report["foreignExposureRestored"] as? Bool == true && report["systemRegionsRestored"] as? Bool == true
+                && NBMenuBarOverflowState(frame) == initialOverflow
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1) {
+            try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        }
+        NSApp.terminate(nil)
+    }
+
     private func runForeignDividerCheck() async {
+        if CommandLine.arguments.contains("--divider-backend-only") {
+            await runDirectDividerBackendCheck()
+            return
+        }
+        if CommandLine.arguments.contains("--restore-foreign-divider-order") {
+            var repair: [String: Any] = [:]
+            if let screen = NSScreen.screens.first {
+                let frame = HiddenBar.captureFrame(for: screen)
+                let entries = NBMenuBarEntries(frame)
+                repair["beforeOrder"] = entries.filter { $0.bundle != Bundle.main.bundleIdentifier }.map(\.label)
+                do {
+                    let disks = entries.filter { $0.bundle == "eu.exelban.Stats" && $0.label == "Disk: Bar chart" }
+                    let cpus = entries.filter { $0.bundle == "eu.exelban.Stats" && $0.label == "CPU: Mini" }
+                    guard disks.count == 1, cpus.count == 1 else { throw MenuBarMovement.Failure.changed }
+                    try await MenuBarMovement().move(disks[0], beside: cpus[0], before: true, screen: screen)
+                    let current = NBMenuBarEntries(frame)
+                    repair["afterOrder"] = current.filter { $0.bundle != Bundle.main.bundleIdentifier }.map(\.label)
+                    repair["passed"] = NBResolveMenuBarEntry(disks[0], frame).map { NBMenuBarEntryIsExposed($0) } == true
+                        && NBResolveMenuBarEntry(cpus[0], frame).map { NBMenuBarEntryIsExposed($0) } == true
+                    if let index = CommandLine.arguments.firstIndex(of: "--divider-capture-dir"), CommandLine.arguments.indices.contains(index + 1) {
+                        let directory = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+                        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                        let image = try await SCScreenshotManager.captureImage(in: CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: 40))
+                        try NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("repaired.png"))
+                    }
+                } catch { repair["error"] = error.localizedDescription }
+            }
+            if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1) {
+                try? JSONSerialization.data(withJSONObject: repair, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+            }
+            NSApp.terminate(nil)
+            return
+        }
         var report: [String: Any] = [:]
         func captureStage(_ name: String, frame: CGRect) async throws {
             guard let index = CommandLine.arguments.firstIndex(of: "--divider-capture-dir"), CommandLine.arguments.indices.contains(index + 1) else { return }
@@ -1181,7 +1554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 try await captureStage("arranged", frame: frame)
                 var stages: [[String: Any]] = []
                 var chosenWidth: Int?
-                for width in stride(from: 24, through: 600, by: 24) {
+                for width in stride(from: 24, through: CommandLine.arguments.contains("--divider-backend-only") ? 0 : 600, by: 24) {
                     divider.length = CGFloat(width)
                     try await Task.sleep(for: .milliseconds(500))
                     let leftLive = NBResolveMenuBarEntry(left, frame), rightLive = NBResolveMenuBarEntry(right, frame)
@@ -1215,6 +1588,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 report["stages"] = stages
                 report["independentForeignHideObserved"] = chosenWidth != nil
+                if CommandLine.arguments.contains("--divider-backend-check") {
+                    NSStatusBar.system.removeStatusItem(divider)
+                    try await Task.sleep(for: .seconds(1))
+                    let backend = IconDivider()
+                    defer { report["dividerBackendObservations"] = backend.observations; backend.restore() }
+                    // Removing D can change the AX reference of another owned
+                    // status item. Read V anew while its NSStatusItem is retained;
+                    // foreign identities still require the original strict match.
+                    let fresh = NBMenuBarEntries(frame)
+                    let freshControls = fresh.filter { $0.label == "NookBar visible control probe" && NBMenuBarEntryIsExposed($0) }
+                    guard freshControls.count == 1, let freshLeft = NBResolveMenuBarEntry(left, frame),
+                          let freshRight = NBResolveMenuBarEntry(right, frame) else { throw MenuBarMovement.Failure.changed }
+                    try await backend.hide(hidden: [freshLeft], visible: [freshRight, freshControls[0]], screen: screen, ownedControls: [statusItem, visibleControl].compactMap { $0 })
+                    report["dividerBackendActive"] = backend.active
+                    report["independentForeignHideObserved"] = backend.active
+                    report["dividerBackendWidth"] = backend.width
+                    report["dividerBackendValidated"] = backend.validate()
+                    report["visibleControlPreserved"] = report["dividerBackendValidated"]
+                    let captureCount = try await HiddenBar.capture(entries: [left], screen: screen).count
+                    report["dividerBackendCaptureCount"] = captureCount
+                    report["hiddenForeignCaptureCount"] = captureCount
+                    report["captureRestoredCollapsed"] = NBMenuBarOverflowState(frame) == 0
+                    try await backend.restoreArrangement()
+                    report["dividerBackendRestored"] = !backend.active
+                    chosenWidth = nil
+                }
                 if let chosenWidth {
                     report["chosenWidth"] = chosenWidth
                     try await captureStage("hidden", frame: frame)
@@ -1259,6 +1658,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 && report["foreignOrderRestored"] as? Bool == true && report["foreignExposureRestored"] as? Bool == true
                 && NBMenuBarOverflowState(frame) == initialOverflow
             report["passed"] = report["foreignPairCheckPassed"] as? Bool == true && report["systemRegionsRestored"] as? Bool == true
+            if CommandLine.arguments.contains("--divider-backend-check") {
+                report["passed"] = report["passed"] as? Bool == true && report["dividerBackendActive"] as? Bool == true
+                    && report["dividerBackendValidated"] as? Bool == true && report["dividerBackendRestored"] as? Bool == true
+            }
         }
         if let index = CommandLine.arguments.firstIndex(of: "--report"), CommandLine.arguments.indices.contains(index + 1),
            let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {

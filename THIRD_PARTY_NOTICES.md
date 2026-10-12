@@ -43,6 +43,13 @@ and `MenuBarItemManager.swift` at the same commit. Copyright (C) 2024 Jordan
 Baird, GPL-3.0-or-later. NookBar uses native field/stepper controls and a monotonic
 deadline with the same input-pause conditions.
 
+Icon search adapts the Fuse and best-match algorithms from
+[Ifrit](https://github.com/ukushu/Ifrit), version 2.0.6, commit
+`3f961f6d39cd2188305671f2ec65914d297571d0`, which Ice uses for search ranking.
+The applicable copyright notices and MIT/Apache-2.0 license texts are preserved
+in [LICENSES/IconSearch.txt](LICENSES/IconSearch.txt). NookBar's implementation
+also searches bundle identifiers, folds accents, and handles long patterns.
+
 These projects are not runtime dependencies. The adapted bridge is compiled
 as part of NookBar. Apple framework names describe system dependencies and do
 not imply Apple's endorsement.

@@ -19,8 +19,16 @@ BOOL NBSetMenuBarOverflowExpanded(CGRect screenFrame, BOOL expanded);
 BOOL NBIsOwnMenuBarEvent(CGEventRef _Nullable event);
 BOOL NBSameMenuBarEntry(NBMenuBarEntry *first, NBMenuBarEntry *second);
 BOOL NBSameMenuBarEntryDescriptor(NBMenuBarEntry *first, NBMenuBarEntry *second);
-// A descriptor-based preference key, not a lifetime or uniqueness guarantee.
+// An exact descriptor/help preference key, not a lifetime or uniqueness guarantee.
 NSString * _Nullable NBMenuBarEntryPreferenceKey(NBMenuBarEntry *entry);
+// Reads current AX fields; changed help/primary labels reject the captured key.
+BOOL NBMenuBarEntryPreferenceKeyIsCurrent(NBMenuBarEntry *entry);
+// Help-only selected entries must retain their exact help; ordinary dynamic
+// tooltips and truly unlabeled entries keep the existing descriptor guards.
+BOOL NBMenuBarEntryActivationLabelIsCurrent(NBMenuBarEntry *entry);
+// Bundle/PID plus launch-date or validated kernel-start evidence.
+// Does not prove item lifetime isolation or authorize system movement.
+NSString * _Nullable NBMenuBarEntryProcessKey(NBMenuBarEntry *entry);
 NBMenuBarEntry * _Nullable NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame);
 // Returns native click delivery; interface/action confirmation is separate.
 BOOL NBPressMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame);

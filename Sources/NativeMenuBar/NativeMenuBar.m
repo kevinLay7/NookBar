@@ -7,6 +7,8 @@
 #import <dlfcn.h>
 #import <objc/message.h>
 #import <unistd.h>
+#import <libproc.h>
+#import <sys/proc_info.h>
 static const int64_t MenuBarEventMarker = 0x4E424F46;
 
 BOOL NBIsOwnMenuBarEvent(CGEventRef event) {
@@ -56,11 +58,26 @@ static NSString *TextAttribute(AXUIElementRef element, CFStringRef key) {
 @property(nonatomic, strong) id element;
 @property(nonatomic, strong) NSRunningApplication *owner;
 @property(nonatomic, strong) NSDate *launchDate;
+@property(nonatomic, copy) NSString *kernelProcessKey;
 @property(nonatomic, copy) NSString *descriptorKind;
 @property(nonatomic, copy) NSString *descriptor;
+@property(nonatomic, copy) NSString *preferenceHelp;
 @end
 @implementation NBMenuBarEntry
 @end
+
+// Public kernel metadata supplies explicit PID-reuse evidence for agents whose
+// NSRunningApplication launchDate is absent. Failed/partial reads remain unsafe.
+static NSString *KernelProcessKey(NSRunningApplication *owner) {
+    pid_t pid = owner.processIdentifier;
+    if (!owner || owner.isTerminated || pid <= 0 || !owner.bundleIdentifier.length) return nil;
+    struct proc_bsdinfo info = {0};
+    if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info) ||
+        info.pbi_pid != pid || !info.pbi_start_tvsec || info.pbi_start_tvusec >= 1000000) return nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@[owner.bundleIdentifier, @(pid), @"kernel-start",
+        @(info.pbi_start_tvsec), @(info.pbi_start_tvusec)] options:0 error:nil];
+    return data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
+}
 
 static CGRect ElementFrame(AXUIElementRef element) {
     CGPoint point = CGPointZero; CGSize size = CGSizeZero;
@@ -94,13 +111,15 @@ static void CollectEntries(AXUIElementRef element, CGRect screen, CGRect region,
             NBMenuBarEntry *entry = [NBMenuBarEntry new];
             entry.bundle = app.bundleIdentifier; entry.frame = frame; entry.element = (__bridge id)element;
             entry.owner = app; entry.launchDate = app.launchDate;
+            if (!entry.launchDate) entry.kernelProcessKey = KernelProcessKey(app);
             NSString *description = TextAttribute(element, kAXDescriptionAttribute);
             NSString *title = TextAttribute(element, kAXTitleAttribute);
             NSString *identifier = TextAttribute(element, kAXIdentifierAttribute);
             entry.descriptorKind = identifier.length ? @"identifier" : (description.length ? @"description" : (title.length ? @"title" : @"none"));
             entry.descriptor = identifier.length ? identifier : (description.length ? description : title);
+            entry.preferenceHelp = TextAttribute(element, kAXHelpAttribute);
             NSString *label = description.length ? description : title;
-            if (!label.length) label = TextAttribute(element, kAXHelpAttribute);
+            if (!label.length) label = entry.preferenceHelp;
             entry.label = label.length ? label : (app.localizedName ?: entry.bundle);
             // Several collapsed icons can share one positive frame. Deduplicate
             // replicated AX trees by identity instead of dropping those icons.
@@ -147,16 +166,19 @@ NSArray<NBMenuBarEntry *> *NBMenuBarEntries(CGRect screenFrame) {
     CFRelease(visited); CFRelease(root);
     if (!budget) return @[];
     // SwiftUI system extras have separate AX identities in inactive Space copies.
-    // An exposed copy identifies the actual pixels at this frame; retain unknown
-    // collapsed identities when no exposed copy proves which one is current.
+    // An exposed copy identifies the actual pixels at an inactive copy's center,
+    // including slightly stale frames. Unknown collapsed identities are retained
+    // unless an exposed same-label identity actually owns that center hit.
     NSArray *exposedSystem = [entries filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NBMenuBarEntry *entry, NSDictionary *bindings) {
         return [entry.bundle isEqual:@"com.apple.MenuBarAgent"] && NBMenuBarEntryIsExposed(entry);
     }]];
     NSArray *normalized = [entries filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NBMenuBarEntry *entry, NSDictionary *bindings) {
-        if (![entry.bundle isEqual:@"com.apple.MenuBarAgent"]) return YES;
+        if (![entry.bundle isEqual:@"com.apple.MenuBarAgent"] || NBMenuBarEntryIsExposed(entry)) return YES;
+        CGPoint center = CGPointMake(CGRectGetMidX(entry.frame), CGRectGetMidY(entry.frame));
         for (NBMenuBarEntry *exposed in exposedSystem) {
-            if (CGRectEqualToRect(entry.frame, exposed.frame) && [entry.label isEqual:exposed.label] &&
-                !CFEqual((__bridge CFTypeRef)entry.element, (__bridge CFTypeRef)exposed.element)) return NO;
+            if ([entry.label isEqual:exposed.label] &&
+                !CFEqual((__bridge CFTypeRef)entry.element, (__bridge CFTypeRef)exposed.element) &&
+                NBMenuBarEntryMatchesPoint(exposed, center)) return NO;
         }
         return YES;
     }]];
@@ -185,11 +207,15 @@ BOOL NBMenuBarEntryMatchesPoint(NBMenuBarEntry *entry, CGPoint point) {
 }
 
 BOOL NBSameMenuBarEntry(NBMenuBarEntry *first, NBMenuBarEntry *second) {
-    return first.element && second.element && first.owner && second.owner &&
-        !first.owner.isTerminated && !second.owner.isTerminated &&
-        first.owner.processIdentifier == second.owner.processIdentifier &&
-        first.launchDate && [first.launchDate isEqualToDate:second.launchDate] &&
-        [first.bundle isEqual:second.bundle] &&
+    if (!first.element || !second.element || !first.owner || !second.owner ||
+        first.owner.isTerminated || second.owner.isTerminated ||
+        first.owner.processIdentifier != second.owner.processIdentifier ||
+        ![first.bundle isEqual:second.bundle]) return NO;
+    NSString *firstProcess = NBMenuBarEntryProcessKey(first);
+    NSString *secondProcess = NBMenuBarEntryProcessKey(second);
+    // Both snapshots need explicit owner lifetime evidence, revalidated now.
+    // Kernel start evidence is not status-item lifetime or move authorization.
+    return firstProcess && [firstProcess isEqual:secondProcess] &&
         CFEqual((__bridge CFTypeRef)first.element, (__bridge CFTypeRef)second.element);
 }
 
@@ -209,9 +235,53 @@ BOOL NBSameMenuBarEntryDescriptor(NBMenuBarEntry *first, NBMenuBarEntry *second)
         [first.descriptor isEqual:second.descriptor];
 }
 
+static NSString *PreferenceKey(NSString *bundle, NSString *kind, NSString *value) {
+    if (!bundle.length || ![value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length ||
+        ![@[@"identifier", @"description", @"title", @"help"] containsObject:kind ?: @""]) return nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@[bundle, kind, value] options:0 error:nil];
+    return data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
+}
+
 NSString *NBMenuBarEntryPreferenceKey(NBMenuBarEntry *entry) {
-    if (!entry.bundle.length || !entry.descriptor.length || [entry.descriptorKind isEqual:@"none"]) return nil;
-    NSData *data = [NSJSONSerialization dataWithJSONObject:@[entry.bundle, entry.descriptorKind, entry.descriptor] options:0 error:nil];
+    // Help is exact snapshot evidence for an explicitly assigned preference,
+    // never a primary capture/activation descriptor or a lifetime guarantee.
+    if ([entry.descriptorKind isEqual:@"none"]) return PreferenceKey(entry.bundle, @"help", entry.preferenceHelp);
+    return PreferenceKey(entry.bundle, entry.descriptorKind, entry.descriptor);
+}
+
+BOOL NBMenuBarEntryPreferenceKeyIsCurrent(NBMenuBarEntry *entry) {
+    if (!NBMenuBarEntryProcessKey(entry)) return NO;
+    AXUIElementRef element = (__bridge AXUIElementRef)entry.element;
+    NSString *identifier = TextAttribute(element, kAXIdentifierAttribute);
+    NSString *description = TextAttribute(element, kAXDescriptionAttribute);
+    NSString *title = TextAttribute(element, kAXTitleAttribute);
+    NSString *kind = identifier.length ? @"identifier" : (description.length ? @"description" : (title.length ? @"title" : @"help"));
+    NSString *value = identifier.length ? identifier : (description.length ? description : (title.length ? title : TextAttribute(element, kAXHelpAttribute)));
+    NSString *captured = NBMenuBarEntryPreferenceKey(entry);
+    return captured && [captured isEqual:PreferenceKey(entry.bundle, kind, value)];
+}
+
+BOOL NBMenuBarEntryActivationLabelIsCurrent(NBMenuBarEntry *entry) {
+    if (!NBSameMenuBarEntry(entry, entry)) return NO;
+    if ([entry.descriptorKind isEqual:@"none"] &&
+        [entry.preferenceHelp stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length) {
+        return NBMenuBarEntryPreferenceKeyIsCurrent(entry);
+    }
+    return YES;
+}
+
+// Process evidence prevents applying a saved descriptor to a restarted owner.
+// It does not distinguish remove/recreate cycles within the same process.
+NSString *NBMenuBarEntryProcessKey(NBMenuBarEntry *entry) {
+    if (!entry.element || !entry.owner || entry.owner.isTerminated ||
+        ![entry.bundle isEqual:entry.owner.bundleIdentifier]) return nil;
+    if (!entry.launchDate) {
+        NSString *current = KernelProcessKey(entry.owner);
+        return entry.kernelProcessKey && [entry.kernelProcessKey isEqual:current] ? current : nil;
+    }
+    if (![entry.launchDate isEqualToDate:entry.owner.launchDate]) return nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@[entry.bundle, @(entry.owner.processIdentifier),
+        @(entry.launchDate.timeIntervalSince1970)] options:0 error:nil];
     return data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
 }
 
@@ -277,13 +347,14 @@ BOOL NBSetMenuBarOverflowExpanded(CGRect screenFrame, BOOL expanded) {
 }
 
 NBMenuBarEntry *NBResolveMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame) {
+    if (!NBMenuBarEntryActivationLabelIsCurrent(entry)) return nil;
     NSArray *matches = [NBMenuBarEntries(screenFrame) filteredArrayUsingPredicate:
         [NSPredicate predicateWithBlock:^BOOL(NBMenuBarEntry *candidate, NSDictionary *bindings) {
             return NBSameMenuBarEntryDescriptor(candidate, entry);
         }]];
     // Reject missing, ambiguous, renamed, or restarted items without guessing an
     // ordinal. macOS may still reuse an AX identity for same-label replacements.
-    return matches.count == 1 ? matches.firstObject : nil;
+    return matches.count == 1 && NBMenuBarEntryActivationLabelIsCurrent(entry) ? matches.firstObject : nil;
 }
 
 BOOL NBPressMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame) {
@@ -291,7 +362,8 @@ BOOL NBPressMenuBarEntry(NBMenuBarEntry *entry, CGRect screenFrame) {
     if (!current || !NBMenuBarEntryIsExposed(current)) return NO;
     CGPoint point = CGPointMake(CGRectGetMidX(current.frame), CGRectGetMidY(current.frame));
     CGRect bar = NBMenuBarFrameAtPoint(point);
-    if (CGRectIsNull(bar) || bar.size.height > 64) return NO;
+    if (CGRectIsNull(bar) || bar.size.height > 64 ||
+        !NBMenuBarEntryActivationLabelIsCurrent(entry) || !NBMenuBarEntryActivationLabelIsCurrent(current)) return NO;
     return PostMenuBarClick(point);
 }
 

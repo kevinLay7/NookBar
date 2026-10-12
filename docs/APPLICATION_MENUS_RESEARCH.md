@@ -49,3 +49,26 @@ app sections and user settings were preserved.
    ownership before adding a public control or automatic behavior.
 3. Verify explicit restore, application switching, quit, failure, Dock visibility,
    fullscreen, and each display, then add automatic room management.
+
+## Reference behavior required for parity
+
+The checked-in Ice source at `Ice/MenuBar/MenuBarManager.swift:149–220`
+subscribes to section-control state changes. Automatic replacement is enabled
+only when its advanced setting is on, native menu bar reveal is selected, the
+system menu bar is visible, the active Space is not fullscreen, and Settings is
+closed. It obtains the application-menu frame on the display, excludes the
+still-hidden section by its physical boundary, and compares the leftmost shown
+item's minimum x coordinate with the application-menu frame's maximum x.
+Overlap triggers replacement; collapsing all sections restores the menus.
+
+The same source at lines 299–327 also exposes an explicit toggle independently
+of that automatic room calculation. `AppState.swift:244–263` sets regular policy
+and calls `NSRunningApplication.current.activate(from: frontmost)` to replace,
+then sets accessory policy and calls `NSApp.deactivate()` to restore. These are
+source requirements, not evidence that those calls succeed on macOS 27.
+
+NookBar must implement both the explicit action/shortcut and the conditional
+automatic behavior once ownership is demonstrated. It must not activate merely
+because captured-strip mode opens, or treat a frontmost-process change as proof
+that the visible application menus were replaced. A native test must record the
+menu bar owner and rendered titles before, during, and after replacement.

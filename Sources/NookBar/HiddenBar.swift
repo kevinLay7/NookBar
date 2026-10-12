@@ -14,7 +14,7 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     private var panel: NSPanel?
     private var outsideMonitor: Any?
     private var localMonitor: Any?
-    var onSelect: ((Icon) -> Void)?
+    var onSelect: ((Icon, NSScreen) -> Void)?
     var onClose: (() -> Void)?
     var isControlWindow: ((NSWindow?) -> Bool)?
     var isVisible: Bool { panel?.isVisible == true }
@@ -32,13 +32,9 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     func contains(_ point: NSPoint) -> Bool { panel?.isVisible == true && panel?.frame.contains(point) == true }
 
     static func matchingIndices(in icons: [Icon], query: String) -> [Int] {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return icons.indices.filter { index in
-            let icon = icons[index]
-            return query.isEmpty || [icon.label, icon.appName, icon.bundle].contains {
-                $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-            }
-        }
+        IconSearch.matchingIndices(in: icons.map { icon in
+            IconSearch.Item(title: icon.appName == icon.label ? icon.appName : "\(icon.appName) — \(icon.label)", bundle: icon.bundle)
+        }, query: query)
     }
 
     // AX and screenshot coordinates use a top-left origin; AppKit uses bottom-left.
@@ -61,10 +57,11 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
 
     static func press(entry: NBMenuBarEntry, screen: NSScreen, beforePress: ((NBMenuBarEntry) -> Bool)? = nil) async -> Bool {
         let frame = captureFrame(for: screen)
-        guard let current = NBResolveMenuBarEntry(entry, frame) else { return false }
+        guard NBMenuBarEntryActivationLabelIsCurrent(entry),
+              let current = NBResolveMenuBarEntry(entry, frame) else { return false }
         if NBMenuBarEntryIsExposed(current) {
-            guard beforePress?(current) != false else { return false }
-            return NBPressMenuBarEntry(current, frame)
+            guard beforePress?(current) != false, NBMenuBarEntryActivationLabelIsCurrent(entry) else { return false }
+            return NBPressMenuBarEntry(entry, frame)
         }
         guard overflowLease == nil, NBMenuBarOverflowState(frame) == 0 else { return false }
         let id = UUID()
@@ -75,10 +72,10 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         let deadline = Date().addingTimeInterval(2)
         repeat {
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return false }
-            guard overflowLease?.id == id else { return false }
+            guard overflowLease?.id == id, NBMenuBarEntryActivationLabelIsCurrent(entry) else { return false }
             if let resolved = NBResolveMenuBarEntry(entry, frame), NBMenuBarEntryIsExposed(resolved) {
-                guard beforePress?(resolved) != false else { return false }
-                opened = NBPressMenuBarEntry(resolved, frame)
+                guard beforePress?(resolved) != false, NBMenuBarEntryActivationLabelIsCurrent(entry) else { return false }
+                opened = NBPressMenuBarEntry(entry, frame)
                 return opened // Keep the overflow open while the item's menu is in use.
             }
         } while Date() < deadline
@@ -270,8 +267,11 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
         case #selector(NSResponder.moveUp(_:)): searchSelection = max(0, searchSelection - 1); updateSearch(); return true
         case #selector(NSResponder.insertNewline(_:)):
             guard filteredIndices.indices.contains(searchSelection) else { NSSound.beep(); return true }
+            guard let screen else { NSSound.beep(); return true }
             let icon = icons[filteredIndices[searchSelection]]
-            close(notify: false); onSelect?(icon); return true
+            // close clears our presentation context; preserve its source screen
+            // with the selected icon before invoking the activation callback.
+            close(notify: false); onSelect?(icon, screen); return true
         case #selector(NSResponder.cancelOperation(_:)): close(); return true
         default: return false
         }
@@ -310,10 +310,10 @@ final class HiddenBar: NSObject, NSWindowDelegate, NSSearchFieldDelegate {
     }
 
     @objc private func selectIcon(_ sender: NSButton) {
-        guard icons.indices.contains(sender.tag) else { return }
+        guard icons.indices.contains(sender.tag), let screen else { return }
         let icon = icons[sender.tag]
         close(notify: false)
-        onSelect?(icon)
+        onSelect?(icon, screen)
     }
 
     func close(notify: Bool = true) {

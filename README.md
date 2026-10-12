@@ -154,17 +154,32 @@ See [the smoke checklist](docs/SMOKE_TEST.md) for lifecycle and UI coverage and
 shortcut registration and launch-at-login controls are implemented; cross-app
 shortcut execution and actual login have not yet been verified.
 
-macOS 27 no longer exposes the per-icon windows used by older tools. The proposed
-backend uses a private system framework, whose behavior can change. Multiple
-icons belonging to one app may share visibility, and system items have limitations.
+The older per-icon capture route has not been established on macOS 27. The
+default app-wide backend uses a private system framework, whose behavior can
+change. Independent assignments use native item movement and a bounded divider;
+the installed public flow has hidden Stats Disk while preserving CPU/RAM and
+combining seven app-wide defaults. This is a tested partition, not full parity.
+System item assignment and restart-stable independent sections remain incomplete.
 Read [the investigation](docs/ice-investigation.txt) for observed facts and remaining checks.
-Independent item control is still under investigation; see
+See the evidence and remaining independent-item work in
 [the per-icon research](docs/PER_ICON_RESEARCH.md). Developers can reproduce the
 reversible divider and native movement experiments by launching the signed app
 with `--separator-lab`. The diagnostic tests both fixed and intrinsic widths,
 and Swap L and R moves only its own temporary items through native Command-drag.
 Quit other NookBar copies first. This diagnostic never changes saved section
 assignments, and is not used by normal launches.
+
+`--persistent-boundaries-check --report /absolute/path/report.json` exercises
+creation and recreation of two retained physical section markers. It records
+their live geometry without moving foreign icons or changing saved section
+assignments, then restores the original marker preferences. This developer-only
+diagnostic does not validate hiding or target-app restart persistence.
+
+`--menu-bar-surfaces-check --report /absolute/path/report.json` captures only
+the matching MenuBarAgent menu-bar surfaces found in public window inventory.
+It exports per-surface PNGs beside the report, with dimensions, pixel hashes,
+and alpha measurements. It does not reveal icons or select arbitrary windows,
+and it does not establish individual-icon mapping or offscreen refresh parity.
 
 ## License and research
 

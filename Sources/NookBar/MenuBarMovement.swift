@@ -45,6 +45,9 @@ final class MenuBarMovement {
         pendingReset = nil
     }
     func move(_ source: NBMenuBarEntry, beside target: NBMenuBarEntry, before: Bool, screen: NSScreen) async throws {
+        // Verified owner identity also permits reading system icons. It does
+        // not establish that those controls support our native drag protocol.
+        guard !source.bundle.hasPrefix("com.apple.") else { throw Failure.rejected }
         guard !isMoving else { throw Failure.busy }
         isMoving = true
         generation += 1
